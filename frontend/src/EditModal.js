@@ -3,28 +3,34 @@ import axios from 'axios';
 
 function EditModal({ slides, filename, onClose }) {
   const [editedSlides, setEditedSlides] = useState(
-    slides.map(slide => ({
-      ...slide,
-      elements: slide.elements.map(el => ({ ...el }))
-    }))
+    [...slides]
+      .sort((a, b) => a.id - b.id)
+      .map(slide => ({
+        ...slide,
+        elements: slide.elements.map(el => ({ ...el }))
+      }))
   );
   const [slideJsons, setSlideJsons] = useState(
-    slides.map(slide => {
-      const cleanSlide = {
-        ...slide,
-        elements: slide.elements.map(el => {
-          if (el.type === 'image') {
-            return { ...el, src: el.src.length > 50 ? '[IMAGE_URL]' : el.src };
-          }
-          return el;
-        })
-      };
-      return JSON.stringify(cleanSlide, null, 2);
-    })
+    [...slides]
+      .sort((a, b) => a.id - b.id)
+      .map(slide => {
+        const cleanSlide = {
+          ...slide,
+          elements: slide.elements.map(el => {
+            if (el.type === 'image') {
+              return { ...el, src: el.src.length > 50 ? '[IMAGE_URL]' : el.src };
+            }
+            return el;
+          })
+        };
+        return JSON.stringify(cleanSlide, null, 2);
+      })
   );
   const [imageFiles, setImageFiles] = useState({});
   const [downloading, setDownloading] = useState(false);
   const [jsonErrors, setJsonErrors] = useState({});
+  const [selectedImageId, setSelectedImageId] = useState(null);
+  const [uploadedImageName, setUploadedImageName] = useState('');
 
   const handleJsonChange = (slideIndex, value) => {
     const newJsons = [...slideJsons];
@@ -45,39 +51,39 @@ function EditModal({ slides, filename, onClose }) {
     }
   };
 
-  const handleImageUpload = (slideIndex, file) => {
+  const handleImageUpload = async (file) => {
     if (!file) return;
     
-    const key = `slide-${slideIndex}-new-image`;
-    setImageFiles({ ...imageFiles, [key]: file });
-    
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const imageElement = {
-        type: 'image',
-        id: `image-${Date.now()}`,
-        src: '[NEW_IMAGE]',
-        x: 1,
-        y: 1,
-        width: 3,
-        height: 2
-      };
+    try {
+      // Create form data for file upload
+      const formData = new FormData();
+      formData.append('image', file);
       
-      const updated = [...editedSlides];
-      updated[slideIndex].elements.push(imageElement);
-      setEditedSlides(updated);
+      // Upload the image to the server
+      const response = await axios.post('/api/upload-image', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
       
-      const newJsons = [...slideJsons];
-      const displaySlide = {
-        ...updated[slideIndex],
-        elements: updated[slideIndex].elements.map(el => 
-          el.type === 'image' ? { ...el, src: el.src.length > 50 ? '[IMAGE_URL]' : el.src } : el
-        )
-      };
-      newJsons[slideIndex] = JSON.stringify(displaySlide, null, 2);
-      setSlideJsons(newJsons);
-    };
-    reader.readAsDataURL(file);
+      // Get the image name from the response
+      const imageName = response.data.imageName;
+      setUploadedImageName(imageName);
+      
+      // Show confirmation
+      console.log(`Image uploaded: ${imageName}\n\nYou can now use this name in your slide JSON.`);
+    } catch (error) {
+      alert('Error uploading image: ' + error.message);
+    }
+  };
+  
+  const handleClearUploads = async () => {
+    try {
+      const response = await axios.post('/api/clear-uploads');
+      alert('Upload folder cleared successfully!');
+      setUploadedImageName('');
+      setImageFiles({});
+    } catch (error) {
+      alert('Error clearing uploads: ' + error.message);
+    }
   };
 
 
@@ -152,31 +158,59 @@ function EditModal({ slides, filename, onClose }) {
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-      <div className="bg-white rounded-lg max-w-7xl w-full max-h-[95vh] overflow-y-auto">
-        <div className="p-4 border-b">
+      <div className="bg-white rounded-lg max-w-7xl w-full h-[95vh] flex flex-col">
+        <div className="p-4 border-b sticky top-0 bg-white z-10">
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-bold">Edit Presentation</h2>
-            <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={handleClearUploads}
+                className="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600"
+              >
+                Clear Uploads
+              </button>
+              <label className="bg-green-600 text-white px-3 py-1 rounded text-sm cursor-pointer hover:bg-green-700">
+                Upload Image
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleImageUpload(e.target.files[0])}
+                  className="hidden"
+                />
+              </label>
+              <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl">×</button>
+            </div>
           </div>
-          <p className="text-sm text-gray-600 mt-1">
-            <span className="font-medium">Instructions:</span> Edit slide JSON directly in textareas below • Use "Add Image" to upload new images
+          {uploadedImageName && (
+            <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-sm">
+              <span className="font-medium">Uploaded image:</span> {uploadedImageName}
+            </div>
+          )}
+          <p className="text-sm text-gray-600 mt-2">
+            <span className="font-medium">Instructions:</span> Upload images using the button above • Edit slide JSON directly in textareas below
           </p>
         </div>
 
-        <div className="p-6 space-y-6">
-          {editedSlides.map((slide, slideIndex) => (
+        <div className="p-6 space-y-6 overflow-y-auto flex-grow">
+          {/* Log slide IDs for debugging */}
+          {console.log('Original slide IDs:', slides.map(s => s.id))}
+          {console.log('Edited slide IDs:', editedSlides.map(s => s.id))}
+          
+          {/* Use numeric sort by ID to ensure correct sequence */}
+          {[...slides].sort((a, b) => a.id - b.id).map((originalSlide) => {
+            const slide = editedSlides.find(s => s.id === originalSlide.id);
+            const slideIndex = editedSlides.findIndex(s => s.id === originalSlide.id);
+            if (!slide) {
+              console.log(`Missing slide with ID ${originalSlide.id}`);
+              return null;
+            }
+            return (
             <div key={slide.id} className="border rounded-lg p-4">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="font-semibold">Slide {slide.id} JSON</h3>
-                <label className="bg-blue-500 text-white px-3 py-1 rounded text-sm cursor-pointer hover:bg-blue-600">
-                  Add Image
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={(e) => handleImageUpload(slideIndex, e.target.files[0])}
-                    className="hidden"
-                  />
-                </label>
+                <span className="text-sm bg-blue-100 px-2 py-1 rounded-full">
+                  Slide #{slide.id}
+                </span>
               </div>
               
               <textarea
@@ -203,13 +237,14 @@ function EditModal({ slides, filename, onClose }) {
               
               <div className="mt-2 text-xs text-gray-600">
                 <strong>Tip:</strong> Edit the JSON directly to modify slide elements. 
-                Use "Add Image" button to upload new images.
+                Use the "Upload Image" button at the top to add images, then reference them by name in your JSON.
               </div>
             </div>
-          ))}
+          );
+          })}
         </div>
 
-        <div className="p-6 border-t bg-gray-50">
+        <div className="p-6 border-t bg-gray-50 sticky bottom-0">
           <div className="flex justify-end space-x-4">
             <button
               onClick={onClose}
