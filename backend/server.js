@@ -7,14 +7,35 @@ const PptxGenJS = require('pptxgenjs');
 const JSZip = require('jszip');
 const xml2js = require('xml2js');
 const sharp = require('sharp');
+const mongoose = require('mongoose');
+const { insertImageIntoSlide } = require('./insertImage');
+require('dotenv').config();
 
 const app = express();
-const PORT = 3001;
+const PORT = process.env.PORT || 3001;
+console.log = function() {}
+// Connect to MongoDB
+mongoose.connect(process.env.MONGODB_CONNECT)
+  .then(() => console.log('Connected to MongoDB'))
+  .catch(err => console.error('MongoDB connection error:', err));
+
+// Define Template Schema
+const templateSchema = new mongoose.Schema({
+  templateName: { type: String, required: true },
+  slides: [{
+    slideNo: Number,
+    slideContent: Object
+  }],
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Template = mongoose.model('Template', templateSchema);
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
-app.use('/images', express.static('uploads'));
+app.use('/images', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use(express.static('public'));
 
 // Configure multer for file uploads
@@ -70,13 +91,56 @@ async function parsePptx(filePath) {
       }
     }
     
+    // Get slide layout relationships
+    let slideLayoutRelationships = {};
+    const slideLayoutRelsFiles = Object.keys(contents.files)
+      .filter(name => name.startsWith('ppt/slideLayouts/_rels/') && name.endsWith('.xml.rels'));
+    
+    for (const relsFile of slideLayoutRelsFiles) {
+      try {
+        const parser = new xml2js.Parser();
+        const relsXml = await contents.files[relsFile].async('string');
+        const relsData = await parser.parseStringPromise(relsXml);
+        if (relsData.Relationships && relsData.Relationships.Relationship) {
+          relsData.Relationships.Relationship.forEach(rel => {
+            const layoutNum = relsFile.match(/slideLayout(\d+)\.xml\.rels/)?.[1];
+            if (layoutNum) {
+              slideLayoutRelationships[`layout${layoutNum}_${rel.$.Id}`] = rel.$.Target;
+            }
+          });
+        }
+      } catch (error) {
+        console.warn(`Error parsing slide layout relationships: ${error.message}`);
+      }
+    }
+    
     // Log all files in the zip for debugging
     console.log('All files in PPTX:');
+    const mediaFiles = [];
+    const xmlFiles = [];
+    const otherFiles = [];
+    
     Object.keys(contents.files).forEach(file => {
       if (file.includes('media/') || file.includes('image')) {
-        console.log(`- ${file}`);
+        mediaFiles.push(file);
+      } else if (file.endsWith('.xml')) {
+        xmlFiles.push(file);
+      } else if (!file.endsWith('/')) { // Skip directories
+        otherFiles.push(file);
       }
     });
+    
+    console.log(`Found ${mediaFiles.length} media files, ${xmlFiles.length} XML files, and ${otherFiles.length} other files`);
+    
+    if (mediaFiles.length > 0) {
+      console.log('Media files:', mediaFiles.slice(0, 10).join(', ') + (mediaFiles.length > 10 ? '...' : ''));
+    }
+    
+    // Log all relationship files to help with debugging
+    const relFiles = xmlFiles.filter(file => file.includes('_rels/'));
+    if (relFiles.length > 0) {
+      console.log('Relationship files:', relFiles.join(', '));
+    }
     
     for (let i = 0; i < slideFiles.length; i++) {
       const slideXml = await contents.files[slideFiles[i]].async('string');
@@ -85,7 +149,7 @@ async function parsePptx(filePath) {
       
       // Get slide relationships
       const relsFile = relsFiles.find(rel => rel.includes(`slide${i + 1}.xml.rels`));
-      let relationships = {...globalRelationships}; // Include global relationships
+      let relationships = {...globalRelationships, ...slideLayoutRelationships}; // Include global and slide layout relationships
       if (relsFile && contents.files[relsFile]) {
         const relsXml = await contents.files[relsFile].async('string');
         const relsData = await parser.parseStringPromise(relsXml);
@@ -216,61 +280,80 @@ async function extractSlideElements(slideData, relationships, zipContents, slide
       try {
         const blip = element['p:blipFill'][0]['a:blip'][0];
         const embed = blip.$['r:embed'] || blip.$['r:link'];
-        const imagePath = relationships[embed];
+        let imagePath = relationships[embed];
+        
+        // Special handling for non-image references (XML files and other non-media files)
+        if (imagePath && !isLikelyImage(imagePath)) {
+          console.log(`Skipping non-image reference: ${imagePath}`);
+          // These are references to XML files or other non-image files
+          // We'll skip them as they're not images to be displayed
+          continue; // Skip normal image processing
+        }
         
         if (imagePath) {
-          // Try all possible image path formats
+          // Try all possible image paths
+          let imageData = null;
+          let imageFileName = path.basename(imagePath);
+          
+          // Check different possible paths for the image
           const possiblePaths = [
+            `ppt/media/${imageFileName}`,
             `ppt/${imagePath}`,
-            `ppt/media/${imagePath}`,
             imagePath,
-            `ppt/media/${imagePath.split('/').pop()}`,
-            `${imagePath}`,
-            `media/${imagePath.split('/').pop()}`,
-            `ppt/slides/media/${imagePath.split('/').pop()}`
+            `ppt/media/${path.basename(imagePath)}`,
+            `media/${imageFileName}`,
+            `ppt/slides/media/${imageFileName}`,
+            `ppt/slideLayouts/${imageFileName}`,
+            `ppt/slideLayouts/${path.basename(imagePath)}`,
+            `ppt/slideLayouts/slideLayout${slideNum}.xml`
           ];
           
-          let imageFile = null;
-          for (const path of possiblePaths) {
-            if (zipContents.files[path]) {
-              imageFile = zipContents.files[path];
-              console.log(`Found image at path: ${path}`);
+          for (const possiblePath of possiblePaths) {
+            if (zipContents.files[possiblePath]) {
+              console.log(`Found image at: ${possiblePath}`);
+              imageData = await zipContents.files[possiblePath].async('nodebuffer');
               break;
             }
           }
           
           // If still not found, try to find by extension
-          if (!imageFile) {
+          if (!imageData) {
             const extension = imagePath.split('.').pop().toLowerCase();
             const mediaFiles = Object.keys(zipContents.files).filter(name => 
               name.includes('media/') && name.endsWith(`.${extension}`)
             );
             
             if (mediaFiles.length > 0) {
-              imageFile = zipContents.files[mediaFiles[0]];
               console.log(`Found image by extension: ${mediaFiles[0]}`);
+              imageData = await zipContents.files[mediaFiles[0]].async('nodebuffer');
             }
           }
           
-          if (imageFile) {
-            // Store image file reference instead of base64 data
+          if (imageData) {
+            // Save image to uploads directory
             const extension = imagePath.split('.').pop() || 'png';
-            const imageName = `slide${slideNum}_image${idx}_${Date.now()}.${extension}`;
-            const imagePath_temp = `uploads/${imageName}`;
-            const imageBuffer = await imageFile.async('nodebuffer');
-            fs.writeFileSync(imagePath_temp, imageBuffer);
+            const uniqueFileName = `slide${slideNum}_image${idx}_${Date.now()}.${extension}`;
+            const imageSavePath = path.join('uploads', uniqueFileName);
+            
+            fs.writeFileSync(imageSavePath, imageData);
             
             elements.push({
               type: 'image',
               id: `image-${idx}`,
-              src: imageName, // Store filename instead of base64
+              src: uniqueFileName, // Just the filename, not the full path
+              fullPath: `/uploads/${uniqueFileName}`, // Full path for frontend access
               x: x,
               y: y,
               width: width,
               height: height
             });
           } else {
-            console.warn(`Could not find image file for path: ${imagePath}`);
+            // Check if this is likely an image or another type of reference
+            if (imagePath && isLikelyImage(imagePath)) {
+              console.error(`Could not find image file for path: ${imagePath}`);
+            } else {
+              console.log(`Skipping non-image reference: ${imagePath}`);
+            }
           }
         } else {
           console.warn(`No relationship found for embed ID: ${embed}`);
@@ -407,6 +490,7 @@ function extractElementsFromAlternativeStructure(slideData, slideNum) {
 async function processImageForPptx(contents, imagePath, slideIndex, element) {
   // Ensure slideIndex is a number and use actual slide ID
   const slideId = parseInt(slideIndex) + 1; // Convert to 1-based slide ID
+  console.log(`Processing image for slide ${slideId} from path ${imagePath}`);
   try {
     // Read the image file
     const imageData = fs.readFileSync(imagePath);
@@ -418,6 +502,40 @@ async function processImageForPptx(contents, imagePath, slideIndex, element) {
     const extension = imagePath.split('.').pop().toLowerCase();
     const mediaPath = `ppt/media/image${Date.now()}.${extension}`;
     contents.file(mediaPath, imageData);
+    
+    // Preserve original dimensions exactly as they were in the uploaded PPTX
+    // This is critical for maintaining the exact layout
+    let x, y, imgWidth, imgHeight;
+    
+    if (element.originalElement) {
+      // Use original element's exact dimensions and position
+      x = parseInt(element.originalElement.x * 914400);
+      y = parseInt(element.originalElement.y * 914400);
+      imgWidth = parseInt(element.originalElement.width * 914400);
+      imgHeight = parseInt(element.originalElement.height * 914400);
+      console.log(`Using original dimensions: x=${x}, y=${y}, w=${imgWidth}, h=${imgHeight}`);
+    } else {
+      // Use the provided dimensions, converting to EMUs
+      x = parseInt(element.x * 914400);
+      y = parseInt(element.y * 914400);
+      imgWidth = parseInt(element.width * 914400);
+      imgHeight = parseInt(element.height * 914400);
+      
+      // Only adjust aspect ratio if we don't have original dimensions
+      try {
+        const metadata = await sharp(imageData).metadata();
+        if (metadata.width && metadata.height) {
+          // Keep aspect ratio if only one dimension is specified
+          if (element.width && !element.height) {
+            imgHeight = parseInt((element.width * metadata.height / metadata.width) * 914400);
+          } else if (!element.width && element.height) {
+            imgWidth = parseInt((element.height * metadata.width / metadata.height) * 914400);
+          }
+        }
+      } catch (err) {
+        console.log(`Could not get image dimensions: ${err.message}`);
+      }
+    }
     
     // Update the slide's relationship file to include this image
     const slideRelPath = `ppt/slides/_rels/slide${slideId}.xml.rels`;
@@ -488,6 +606,61 @@ async function processImageForPptx(contents, imagePath, slideIndex, element) {
               const builder = new xml2js.Builder();
               updatedRelXml = builder.buildObject(relsData);
               console.log(`Updated existing relationship ${originalRelId} to point to ${mediaPath}`);
+              
+              // Now update the slide XML to maintain the exact position
+              const slideFile = `ppt/slides/slide${slideId}.xml`;
+              if (contents.files[slideFile]) {
+                let slideXml = await contents.files[slideFile].async('string');
+                
+                // Find and update the image position in the slide XML
+                try {
+                  const slideParser = new xml2js.Parser();
+                  const slideData = await slideParser.parseStringPromise(slideXml);
+                  
+                  if (slideData['p:sld'] && slideData['p:sld']['p:cSld'] && 
+                      slideData['p:sld']['p:cSld'][0]['p:spTree'] && 
+                      slideData['p:sld']['p:cSld'][0]['p:spTree'][0]['p:pic']) {
+                    
+                    const pics = slideData['p:sld']['p:cSld'][0]['p:spTree'][0]['p:pic'];
+                    for (const pic of pics) {
+                      if (pic['p:blipFill'] && pic['p:blipFill'][0]['a:blip'] && 
+                          pic['p:blipFill'][0]['a:blip'][0].$['r:embed'] === originalRelId) {
+                        
+                        // Found the image, update its position if needed
+                        if (pic['p:spPr'] && pic['p:spPr'][0]['a:xfrm'] && 
+                            element.x !== undefined && element.y !== undefined) {
+                          
+                          const xfrm = pic['p:spPr'][0]['a:xfrm'][0];
+                          
+                          // Update position (EMUs = English Metric Units, 1 inch = 914400 EMUs)
+                          if (xfrm['a:off'] && xfrm['a:off'][0].$) {
+                            // Preserve exact position values
+                            xfrm['a:off'][0].$.x = x.toString();
+                            xfrm['a:off'][0].$.y = y.toString();
+                            console.log(`Updated position to x=${x}, y=${y}`);
+                          }
+                          
+                          // Update size if needed
+                          if (xfrm['a:ext'] && xfrm['a:ext'][0].$) {
+                            // Preserve exact dimension values
+                            xfrm['a:ext'][0].$.cx = imgWidth.toString();
+                            xfrm['a:ext'][0].$.cy = imgHeight.toString();
+                            console.log(`Updated dimensions to w=${imgWidth}, h=${imgHeight}`);
+                          }
+                        }
+                      }
+                    }
+                  }
+                  
+                  // Convert back to XML and update the file
+                  const slideBuilder = new xml2js.Builder();
+                  const updatedSlideXml = slideBuilder.buildObject(slideData);
+                  contents.file(slideFile, updatedSlideXml);
+                  
+                } catch (slideError) {
+                  console.error('Error updating slide XML:', slideError);
+                }
+              }
             }
           }
         } catch (parseError) {
@@ -498,6 +671,15 @@ async function processImageForPptx(contents, imagePath, slideIndex, element) {
       } else {
         // Add new relationship
         updatedRelXml = addImageRelationship(relXml, imageId, mediaPath);
+        
+        // Use the dedicated function to insert the image into the slide
+        // Pass exact EMU values to ensure precise positioning
+        await insertImageIntoSlide(contents, slideId, imageId, mediaPath, {
+          exactX: x,
+          exactY: y,
+          exactWidth: imgWidth,
+          exactHeight: imgHeight
+        });
       }
       
       contents.file(slideRelPath, updatedRelXml);
@@ -524,12 +706,12 @@ function addImageRelationship(relXml, id, target) {
   // If the XML doesn't have a closing Relationships tag, add the relationship before the end
   if (relXml.includes('</Relationships>')) {
     return relXml.replace('</Relationships>', 
-      `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="/${target}"/></Relationships>`);
+      `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${path.basename(target)}"/></Relationships>`);
   } else {
     // If the XML is malformed or empty, create a new relationships XML
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="/${target}"/>
+  <Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/${path.basename(target)}"/>
 </Relationships>`;
   }
 }
@@ -543,9 +725,61 @@ function getImageMimeType(imagePath) {
     'jpeg': 'image/jpeg',
     'gif': 'image/gif',
     'bmp': 'image/bmp',
-    'svg': 'image/svg+xml'
+    'svg': 'image/svg+xml',
+    'emf': 'image/emf',
+    'wmf': 'image/wmf'
   };
   return mimeTypes[ext] || 'image/png';
+}
+
+// Check if a path is likely an image
+function isLikelyImage(path) {
+  if (!path) return false;
+  
+  // Check for common image extensions
+  if (path.match(/\.(png|jpg|jpeg|gif|bmp|tiff|svg|emf|wmf)$/i)) {
+    return true;
+  }
+  
+  // Check for paths that are likely not images
+  if (path.endsWith('.xml') || 
+      path.includes('slideLayout') || 
+      path.includes('notesSlide') || 
+      path.includes('theme')) {
+    return false;
+  }
+  
+  // Check if path contains 'media' or 'image' which suggests it might be an image
+  if (path.includes('media/') || path.includes('image')) {
+    return true;
+  }
+  
+  return false;
+}
+
+// Find image file path from various possible locations
+async function findImageFile(imagePath) {
+  // Try multiple possible paths
+  const possiblePaths = [
+    imagePath,
+    `uploads/${imagePath}`,
+    path.join(__dirname, 'uploads', imagePath),
+    path.join(process.cwd(), 'uploads', imagePath),
+    imagePath.startsWith('/') ? `.${imagePath}` : imagePath,
+    imagePath.startsWith('/uploads/') ? `.${imagePath}` : `/uploads/${imagePath}`
+  ];
+  
+  for (const path of possiblePaths) {
+    try {
+      if (fs.existsSync(path)) {
+        return path;
+      }
+    } catch (err) {
+      // Ignore errors and try next path
+    }
+  }
+  
+  return null;
 }
 
 // Upload and parse PPTX
@@ -607,6 +841,45 @@ app.post('/api/upload-image', upload.single('image'), (req, res) => {
   }
 });
 
+// List presentations endpoint
+app.get('/api/list-presentations', (req, res) => {
+  try {
+    const uploadDir = 'uploads';
+    const presentations = [];
+    
+    if (fs.existsSync(uploadDir)) {
+      const files = fs.readdirSync(uploadDir);
+      
+      // Filter for PPTX files and get their details
+      files.forEach(file => {
+        const filePath = path.join(uploadDir, file);
+        if (fs.statSync(filePath).isFile() && (file.endsWith('.pptx') || file.endsWith('.ppt'))) {
+          const stats = fs.statSync(filePath);
+          presentations.push({
+            name: file,
+            type: file.split('.').pop().toUpperCase(),
+            size: formatFileSize(stats.size),
+            date: new Date(stats.mtime).toLocaleString(),
+            path: filePath
+          });
+        }
+      });
+    }
+    
+    res.json({ success: true, presentations });
+  } catch (error) {
+    console.error('Error listing presentations:', error);
+    res.status(500).json({ error: 'Failed to list presentations' });
+  }
+});
+
+// Helper function to format file size
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  else if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+  else return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
 // Clear uploads folder endpoint
 app.post('/api/clear-uploads', (req, res) => {
   try {
@@ -635,6 +908,282 @@ app.post('/api/clear-uploads', (req, res) => {
 
 // Store original PPTX data
 const originalFiles = new Map();
+
+// Save template to MongoDB
+app.post('/api/save-template', async (req, res) => {
+  try {
+    const { templateName, slides } = req.body;
+    
+    if (!templateName) {
+      return res.status(400).json({ error: 'Template name is required' });
+    }
+    
+    const slidesData = typeof slides === 'string' ? JSON.parse(slides) : slides;
+    
+    // Format slides for MongoDB storage
+    const formattedSlides = slidesData.map(slide => ({
+      slideNo: slide.id,
+      slideContent: slide
+    }));
+    
+    // Check if template with this name already exists
+    let template = await Template.findOne({ templateName });
+    
+    if (template) {
+      // Update existing template
+      template.slides = formattedSlides;
+      template.updatedAt = Date.now();
+      await template.save();
+      res.json({ success: true, message: 'Template updated successfully', templateId: template._id });
+    } else {
+      // Create new template
+      template = new Template({
+        templateName,
+        slides: formattedSlides
+      });
+      await template.save();
+      res.json({ success: true, message: 'Template saved successfully', templateId: template._id });
+    }
+  } catch (error) {
+    console.error('Save template error:', error);
+    res.status(500).json({ error: 'Failed to save template' });
+  }
+});
+
+// Get all templates
+app.get('/api/templates', async (req, res) => {
+  try {
+    const templates = await Template.find().select('templateName createdAt').sort('-createdAt');
+    res.json({ success: true, templates });
+  } catch (error) {
+    console.error('Get templates error:', error);
+    res.status(500).json({ error: 'Failed to get templates' });
+  }
+});
+
+// Get template by ID
+app.get('/api/templates/:id', async (req, res) => {
+  try {
+    const templateId = req.params.id;
+    const template = await Template.findById(templateId);
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    // Format slides for frontend
+    const slides = template.slides.map(slide => slide.slideContent);
+    
+    res.json({ 
+      success: true, 
+      templateName: template.templateName,
+      slides: slides
+    });
+  } catch (error) {
+    console.error('Get template by ID error:', error);
+    res.status(500).json({ error: 'Failed to get template' });
+  }
+});
+
+// Generate PPTX from template
+app.get('/api/generate-template/:id', async (req, res) => {
+  try {
+    const templateId = req.params.id;
+    const template = await Template.findById(templateId);
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    // Instead of creating a new PPTX from scratch, we'll use the same approach as /api/generate
+    // First, find a suitable base PPTX file to use as a template
+    const uploadDir = 'uploads';
+    let baseFilePath = null;
+    
+    if (fs.existsSync(uploadDir)) {
+      const files = fs.readdirSync(uploadDir);
+      // Find the first PPTX file to use as a base
+      for (const file of files) {
+        if (file.endsWith('.pptx')) {
+          baseFilePath = path.join(uploadDir, file);
+          break;
+        }
+      }
+    }
+    
+    if (!baseFilePath) {
+      // If no base file found, fall back to creating a new one
+      const pptx = new PptxGenJS();
+      
+      // Process each slide in the template
+      for (const slideData of template.slides) {
+        const slide = pptx.addSlide();
+        
+        // Process slide content (text, images, etc.)
+        const content = slideData.slideContent;
+        if (content.elements) {
+          for (const element of content.elements) {
+            if (element.type === 'text') {
+              slide.addText(element.content, {
+                x: element.x,
+                y: element.y,
+                w: element.width || 5,
+                h: element.height || 1,
+                fontSize: 14
+              });
+            }
+          }
+        }
+      }
+      
+      // Generate the PPTX file
+      const buffer = await pptx.write('nodebuffer');
+      
+      // Set response headers for file download
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+      res.setHeader('Content-Disposition', `attachment; filename="${template.templateName}.pptx"`);
+      
+      // Send the file
+      res.send(buffer);
+      return;
+    }
+    
+    // Use the same approach as /api/generate to modify an existing PPTX
+    const originalData = await fs.readFileSync(baseFilePath);
+    const zip = new JSZip();
+    const contents = await zip.loadAsync(originalData);
+    
+    // Get the slides from the template
+    const slidesData = template.slides.map(slide => slide.slideContent);
+    
+    // Create a new PPTX with the same structure as the original
+    const originalSlides = await parsePptx(baseFilePath);
+    
+    // Update slides with template data
+    for (let i = 0; i < slidesData.length; i++) {
+      const slideData = slidesData[i];
+      // Use the actual slide ID from the data
+      const slideId = slideData.id || (i + 1);
+      
+      // Find the corresponding slide file
+      const slideFile = `ppt/slides/slide${slideId}.xml`;
+      
+      if (!contents.files[slideFile]) {
+        console.warn(`Slide file not found: ${slideFile}`);
+        continue;
+      }
+      
+      // Get the original slide content
+      let slideXml = await contents.files[slideFile].async('string');
+      
+      // Process all elements
+      if (slideData.elements) {
+        for (const element of slideData.elements) {
+          // Find matching element in original slide
+          const originalSlide = originalSlides.find(s => s.id === slideId);
+          if (!originalSlide) continue;
+          
+          // Find the matching element with more precise criteria
+          let originalElement = originalSlide.elements.find(el => el.id === element.id);
+          
+          // If no match by ID, try to match by position and type
+          if (!originalElement) {
+            originalElement = originalSlide.elements.find(el => 
+              el.type === element.type && 
+              Math.abs(el.x - element.x) < 0.1 && 
+              Math.abs(el.y - element.y) < 0.1
+            );
+          }
+          
+          // If still no match, try with more relaxed position criteria
+          if (!originalElement) {
+            originalElement = originalSlide.elements.find(el => 
+              el.type === element.type && 
+              Math.abs(el.x - element.x) < 1 && 
+              Math.abs(el.y - element.y) < 1
+            );
+          }
+          
+          // Update text elements
+          if (element.type === 'text' && originalElement) {
+            slideXml = replaceTextInXml(slideXml, originalElement.content, element.content);
+          }
+          // Process image elements if needed
+          else if (element.type === 'image' && element.src) {
+            // Use the helper function to find the image file
+            const imagePath = await findImageFile(element.src);
+            
+            if (imagePath) {
+              // Pass the original element for position reference
+              await processImageForPptx(contents, imagePath, slideId - 1, {
+                ...element,
+                originalElement: originalElement || null,
+                // Use original dimensions if available
+                originalX: element.originalX,
+                originalY: element.originalY,
+                originalWidth: element.originalWidth,
+                originalHeight: element.originalHeight
+              });
+            } else {
+              console.warn(`Image not found for element: ${element.src}`);
+            }
+          }
+        }
+      }
+      
+      // Update the slide XML
+      contents.file(slideFile, slideXml);
+    }
+    
+    // Generate updated PPTX
+    const updatedBuffer = await contents.generateAsync({ 
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      compressionOptions: { level: 6 }
+    });
+    
+    // Save to temporary file and fix image dimensions
+    const tempPath = `uploads/temp-${template.templateName}-${Date.now()}.pptx`;
+    const outputPath = `uploads/${template.templateName}-${Date.now()}.pptx`;
+    fs.writeFileSync(tempPath, updatedBuffer);
+    
+    // Fix image dimensions in the generated PPTX
+    const { fixPptxImageDimensions } = require('./fix-pptx');
+    await fixPptxImageDimensions(tempPath, outputPath);
+    
+    // Clean up the temporary file
+    fs.unlink(tempPath, () => {});
+    
+    // Send the fixed file
+    res.download(outputPath, `${template.templateName}.pptx`, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+      }
+      // Clean up the output file
+      fs.unlink(outputPath, () => {});
+    });
+  } catch (error) {
+    console.error('Generate template error:', error);
+    res.status(500).json({ error: 'Failed to generate template' });
+  }
+});
+
+// Delete template
+app.delete('/api/templates/:id', async (req, res) => {
+  try {
+    const templateId = req.params.id;
+    const result = await Template.findByIdAndDelete(templateId);
+    
+    if (!result) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    res.json({ success: true, message: 'Template deleted successfully' });
+  } catch (error) {
+    console.error('Delete template error:', error);
+    res.status(500).json({ error: 'Failed to delete template' });
+  }
+});
 
 // Edit data endpoint - receives content and processes it
 app.post('/api/edit-data', async (req, res) => {
@@ -673,8 +1222,9 @@ app.post('/api/edit-data', async (req, res) => {
 // Generate updated PPTX by modifying original
 app.post('/api/generate', upload.any(), async (req, res) => {
   try {
-    const { slides, filename } = req.body;
+    const { slides, filename, templateName } = req.body;
     const slidesData = JSON.parse(slides);
+    const outputFilename = templateName ? `${templateName}-${Date.now()}.pptx` : `updated-${Date.now()}.pptx`;
     
     // Get original file path
     const originalPath = `uploads/${filename}`;
@@ -683,7 +1233,7 @@ app.post('/api/generate', upload.any(), async (req, res) => {
     }
     
     // Load original PPTX
-    const originalData = fs.readFileSync(originalPath);
+    const originalData = await fs.readFileSync(originalPath);
     const zip = new JSZip();
     const contents = await zip.loadAsync(originalData);
     
@@ -693,15 +1243,42 @@ app.post('/api/generate', upload.any(), async (req, res) => {
     // Update slides with JSON data
     for (let i = 0; i < slidesData.length; i++) {
       const slideData = slidesData[i];
-      const originalSlide = originalSlides[i];
-      const slideFile = `ppt/slides/slide${i + 1}.xml`;
+      // Use the actual slide ID from the data instead of the array index
+      const slideId = slideData.id || (i + 1);
+      const originalSlide = originalSlides.find(s => s.id === slideId) || originalSlides[i];
+      const slideFile = `ppt/slides/slide${slideId}.xml`;
       
-      if (contents.files[slideFile] && originalSlide) {
+      if (!contents.files[slideFile]) {
+        console.warn(`Slide file not found: ${slideFile}. Available slides: ${Object.keys(contents.files).filter(name => name.startsWith('ppt/slides/slide') && name.endsWith('.xml')).join(', ')}`);
+        continue;
+      }
+      
+      if (originalSlide) {
         let slideXml = await contents.files[slideFile].async('string');
+        console.log(`Processing slide ${slideId} with ${slideData.elements?.length || 0} elements`);
         
         // Process all elements
         for (const element of slideData.elements) {
-          const originalElement = originalSlide.elements.find(el => el.id === element.id);
+          // Find the matching element with more precise criteria
+          let originalElement = originalSlide.elements.find(el => el.id === element.id);
+          
+          // If no match by ID, try to match by position and type
+          if (!originalElement) {
+            originalElement = originalSlide.elements.find(el => 
+              el.type === element.type && 
+              Math.abs(el.x - element.x) < 0.1 && 
+              Math.abs(el.y - element.y) < 0.1
+            );
+          }
+          
+          // If still no match, try with more relaxed position criteria
+          if (!originalElement) {
+            originalElement = originalSlide.elements.find(el => 
+              el.type === element.type && 
+              Math.abs(el.x - element.x) < 1 && 
+              Math.abs(el.y - element.y) < 1
+            );
+          }
           
           // Update text elements
           if (element.type === 'text') {
@@ -711,18 +1288,23 @@ app.post('/api/generate', upload.any(), async (req, res) => {
           }
           // Process image elements
           else if (element.type === 'image' && element.src) {
-            if (originalElement && element.src !== originalElement.src) {
-              console.log(`Image source changed from ${originalElement.src} to ${element.src}`);
-              
-              // Get the new image path from uploads folder
-              const newImagePath = `uploads/${element.src}`;
-              
-              if (fs.existsSync(newImagePath)) {
-                // Replace the image in the PPTX
-                await processImageForPptx(contents, newImagePath, i, element);
-              } else {
-                console.warn(`New image not found: ${newImagePath}`);
-              }
+            // Use the helper function to find the image file
+            const imagePath = await findImageFile(element.src);
+            
+            if (imagePath) {
+              console.log(`Processing image from path: ${imagePath}`);
+              // Replace the image in the PPTX using the correct slide ID
+              await processImageForPptx(contents, imagePath, slideId - 1, {
+                ...element,
+                originalElement: originalElement || null,
+                // Use original dimensions if available
+                originalX: element.originalX,
+                originalY: element.originalY,
+                originalWidth: element.originalWidth,
+                originalHeight: element.originalHeight
+              });
+            } else {
+              console.warn(`Image not found for element: ${element.src}`);
             }
           }
         }
@@ -733,7 +1315,11 @@ app.post('/api/generate', upload.any(), async (req, res) => {
     }
     
     // Process any pending image updates
-    console.log('Finalizing PPTX with all updates...');
+    console.log(`Finalizing PPTX with all updates for ${slidesData.length} slides...`);
+    console.log(`Slide IDs processed: ${slidesData.map(slide => slide.id).join(', ')}`);
+    console.log(`Original slide IDs: ${originalSlides.map(slide => slide.id).join(', ')}`);
+    console.log(`Available slide files: ${Object.keys(contents.files).filter(name => name.startsWith('ppt/slides/slide') && name.endsWith('.xml')).join(', ')}`);
+    
     
     // Generate updated PPTX with exact same compression
     const updatedBuffer = await contents.generateAsync({ 
@@ -742,12 +1328,22 @@ app.post('/api/generate', upload.any(), async (req, res) => {
       compressionOptions: { level: 6 }
     });
     
-    const outputPath = `uploads/updated-${Date.now()}.pptx`;
-    fs.writeFileSync(outputPath, updatedBuffer);
+    const tempPath = `uploads/temp-${outputFilename}`;
+    const outputPath = `uploads/${outputFilename}`;
+    fs.writeFileSync(tempPath, updatedBuffer);
+    
+    // Fix image dimensions in the generated PPTX
+    const { fixPptxImageDimensions } = require('./fix-pptx');
+    await fixPptxImageDimensions(tempPath, outputPath);
+    
+    // Clean up the temporary file
+    fs.unlink(tempPath, () => {});
     
     console.log(`PPTX file saved to ${outputPath}`);
     
-    res.download(outputPath, 'updated-presentation.pptx', (err) => {
+    // Use template name for the downloaded file if provided
+    const downloadFilename = templateName ? `${templateName}.pptx` : 'updated-presentation.pptx';
+    res.download(outputPath, downloadFilename, (err) => {
       if (err) {
         console.error('Download error:', err);
       }
@@ -801,11 +1397,15 @@ function replaceTextInXml(slideXml, oldText, newText) {
   
   // Try direct replacement first
   const directRegex = new RegExp(`(<a:t[^>]*>)${oldText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(</a:t>)`, 'g');
+  const replacementCount1 = (result.match(directRegex) || []).length;
   result = result.replace(directRegex, `$1${newText}$2`);
   
   // Try escaped version
   const escapedRegex = new RegExp(`(<a:t[^>]*>)${oldTextEscaped.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(</a:t>)`, 'g');
+  const replacementCount2 = (result.match(escapedRegex) || []).length;
   result = result.replace(escapedRegex, `$1${newTextEscaped}$2`);
+  
+  console.log(`Text replacement: "${oldText}" -> "${newText}": ${replacementCount1 + replacementCount2} occurrences replaced`);
   
   // If no replacements were made, try a more aggressive approach for multi-line text
   if (result === slideXml && oldText.includes('\n')) {
@@ -819,6 +1419,56 @@ function replaceTextInXml(slideXml, oldText, newText) {
         const lineRegex = new RegExp(`(<a:t[^>]*>)${oldLines[i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(</a:t>)`, 'g');
         result = result.replace(lineRegex, `$1${newLines[i]}$2`);
       }
+    }
+  }
+  
+  // If still no replacements, try parsing the XML and updating text nodes directly
+  if (result === slideXml) {
+    try {
+      const parser = new xml2js.Parser();
+      parser.parseString(slideXml, (err, slideData) => {
+        if (err) return;
+        
+        // Function to recursively search for text nodes
+        const findAndReplaceText = (obj) => {
+          if (!obj) return false;
+          
+          let replaced = false;
+          
+          // Check if this is a text node
+          if (obj['a:t']) {
+            for (let i = 0; i < obj['a:t'].length; i++) {
+              if (obj['a:t'][i] === oldText || obj['a:t'][i] === oldTextEscaped) {
+                obj['a:t'][i] = newText;
+                replaced = true;
+              }
+            }
+          }
+          
+          // Recursively check all properties
+          for (const key in obj) {
+            if (Array.isArray(obj[key])) {
+              for (let i = 0; i < obj[key].length; i++) {
+                if (typeof obj[key][i] === 'object') {
+                  replaced = findAndReplaceText(obj[key][i]) || replaced;
+                }
+              }
+            }
+          }
+          
+          return replaced;
+        };
+        
+        // Start the recursive search
+        if (findAndReplaceText(slideData)) {
+          // Convert back to XML
+          const builder = new xml2js.Builder();
+          result = builder.buildObject(slideData);
+          console.log('Text replaced using XML parsing approach');
+        }
+      });
+    } catch (parseError) {
+      console.error('Error parsing slide XML for text replacement:', parseError);
     }
   }
   
@@ -857,6 +1507,108 @@ function replaceImageSrcInXml(slideXml, oldSrc, newSrc) {
   
   return result;
 }
+
+// Ensure uploads directory exists
+const uploadDir = 'uploads';
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir);
+  console.log('Created uploads directory');
+}
+
+// Test endpoint for image placement
+app.get('/api/test-image-placement', async (req, res) => {
+  try {
+    const { testImagePlacement } = require('./test-image-placement');
+    
+    // Find a PPTX file to test with
+    const uploadDir = 'uploads';
+    let pptxPath = null;
+    let imagePath = null;
+    
+    if (fs.existsSync(uploadDir)) {
+      const files = fs.readdirSync(uploadDir);
+      
+      // Find a PPTX file
+      for (const file of files) {
+        if (file.endsWith('.pptx')) {
+          pptxPath = path.join(uploadDir, file);
+          break;
+        }
+      }
+      
+      // Find an image file
+      for (const file of files) {
+        if (file.match(/\.(png|jpg|jpeg|gif)$/i)) {
+          imagePath = path.join(uploadDir, file);
+          break;
+        }
+      }
+    }
+    
+    if (!pptxPath || !imagePath) {
+      return res.status(400).json({ error: 'No PPTX or image file found in uploads directory' });
+    }
+    
+    // Run the test
+    const outputPath = await testImagePlacement(
+      pptxPath,
+      imagePath,
+      1, // First slide
+      {
+        x: 1, // 1 inch from left
+        y: 1, // 1 inch from top
+        width: 3, // 3 inches wide
+        height: 2 // 2 inches tall
+      }
+    );
+    
+    if (outputPath) {
+      res.download(outputPath, 'test-image-placement.pptx', (err) => {
+        if (err) {
+          console.error('Download error:', err);
+        }
+        // Clean up the test file
+        fs.unlink(outputPath, () => {});
+      });
+    } else {
+      res.status(500).json({ error: 'Failed to create test PPTX' });
+    }
+  } catch (error) {
+    console.error('Test error:', error);
+    res.status(500).json({ error: 'Test failed: ' + error.message });
+  }
+});
+
+// Fix PPTX endpoint
+app.post('/api/fix-pptx', upload.single('pptx'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    
+    const { fixPptxImageDimensions } = require('./fix-pptx');
+    const inputPath = req.file.path;
+    const outputPath = path.join('uploads', `fixed-${Date.now()}-${req.file.originalname}`);
+    
+    const success = await fixPptxImageDimensions(inputPath, outputPath);
+    
+    if (success) {
+      res.download(outputPath, `fixed-${req.file.originalname}`, (err) => {
+        if (err) {
+          console.error('Download error:', err);
+        }
+        // Clean up files
+        fs.unlink(outputPath, () => {});
+        fs.unlink(inputPath, () => {});
+      });
+    } else {
+      res.status(500).json({ error: 'Failed to fix PPTX file' });
+    }
+  } catch (error) {
+    console.error('Fix PPTX error:', error);
+    res.status(500).json({ error: 'Failed to fix PPTX file' });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`Server running on http://localhost:${PORT}`);

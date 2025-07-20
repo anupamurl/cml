@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PPTX Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1 {
+            color: #333;
+        }
+        .form-container {
+            margin-top: 20px;
+            border: 1px solid #ddd;
+            padding: 20px;
+            border-radius: 5px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            background-color: #f9f9f9;
+        }
+        .error {
+            color: red;
+        }
+        .success {
+            color: green;
+        }
+    </style>
+</head>
+<body>
+    <h1>PPTX Upload and Download Test</h1>
+    <p>This page tests uploading a PPTX file, processing it, and downloading the result.</p>
+    
+    <div class="form-container">
+        <div class="form-group">
+            <label for="pptx-file">Select PPTX File:</label>
+            <input type="file" id="pptx-file" accept=".pptx" />
+        </div>
+        
+        <button id="upload-btn">Upload and Process</button>
+        
+        <div id="result" class="result" style="display: none;"></div>
+    </div>
+
+    <script>
+        document.getElementById('upload-btn').addEventListener('click', async () => {
+            const fileInput = document.getElementById('pptx-file');
+            const resultDiv = document.getElementById('result');
+            
+            if (!fileInput.files || fileInput.files.length === 0) {
+                resultDiv.innerHTML = '<p class="error">Please select a PPTX file first.</p>';
+                resultDiv.style.display = 'block';
+                return;
+            }
+            
+            const file = fileInput.files[0];
+            const formData = new FormData();
+            formData.append('pptx', file);
+            
+            resultDiv.innerHTML = '<p>Processing...</p>';
+            resultDiv.style.display = 'block';
+            
+            try {
+                // Upload the file
+                const uploadResponse = await fetch('/api/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!uploadResponse.ok) {
+                    throw new Error(`Upload failed: ${uploadResponse.statusText}`);
+                }
+                
+                const uploadData = await uploadResponse.json();
+                
+                if (!uploadData.success) {
+                    throw new Error(uploadData.error || 'Unknown error during upload');
+                }
+                
+                resultDiv.innerHTML = `
+                    <p class="success">File uploaded successfully!</p>
+                    <p>Filename: ${uploadData.filename}</p>
+                    <p>Slides: ${uploadData.slides.length}</p>
+                    <p>Total elements: ${uploadData.slides.reduce((sum, slide) => sum + slide.elements.length, 0)}</p>
+                    <button id="download-btn">Download Processed PPTX</button>
+                `;
+                
+                // Store data for download
+                window.uploadedData = {
+                    filename: uploadData.filename,
+                    slides: uploadData.slides
+                };
+                
+                // Add download handler
+                document.getElementById('download-btn').addEventListener('click', async () => {
+                    try {
+                        resultDiv.innerHTML += '<p>Generating PPTX...</p>';
+                        
+                        const generateResponse = await fetch('/api/generate', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json'
+                            },
+                            body: JSON.stringify({
+                                filename: window.uploadedData.filename,
+                                slides: JSON.stringify(window.uploadedData.slides),
+                                templateName: 'TestDownload'
+                            })
+                        });
+                        
+                        if (!generateResponse.ok) {
+                            throw new Error(`Generate failed: ${generateResponse.statusText}`);
+                        }
+                        
+                        // Create a download link
+                        const blob = await generateResponse.blob();
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.style.display = 'none';
+                        a.href = url;
+                        a.download = 'TestDownload.pptx';
+                        document.body.appendChild(a);
+                        a.click();
+                        window.URL.revokeObjectURL(url);
+                        
+                        resultDiv.innerHTML += '<p class="success">PPTX downloaded successfully!</p>';
+                    } catch (error) {
+                        resultDiv.innerHTML += `<p class="error">Error generating PPTX: ${error.message}</p>`;
+                    }
+                });
+                
+            } catch (error) {
+                resultDiv.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+            }
+        });
+    </script>
+</body>
+</html>

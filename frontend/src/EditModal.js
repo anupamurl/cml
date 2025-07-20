@@ -1,13 +1,20 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-function EditModal({ slides, filename, onClose }) {
+function EditModal({ slides, filename, initialTemplateName, onClose }) {
   const [editedSlides, setEditedSlides] = useState(
     [...slides]
       .sort((a, b) => a.id - b.id)
       .map(slide => ({
         ...slide,
-        elements: slide.elements.map(el => ({ ...el }))
+        elements: slide.elements.map(el => ({
+          ...el,
+          // Store original position and dimensions for exact preservation
+          originalX: el.x,
+          originalY: el.y,
+          originalWidth: el.width,
+          originalHeight: el.height
+        }))
       }))
   );
   const [slideJsons, setSlideJsons] = useState(
@@ -18,7 +25,9 @@ function EditModal({ slides, filename, onClose }) {
           ...slide,
           elements: slide.elements.map(el => {
             if (el.type === 'image') {
-              return { ...el, src: el.src.length > 50 ? '[IMAGE_URL]' : el.src };
+              // Use fullPath if available, otherwise use src
+              const displaySrc = el.fullPath || (el.src.startsWith('/') ? el.src : `/uploads/${el.src}`);
+              return { ...el, displaySrc, src: el.src };
             }
             return el;
           })
@@ -27,10 +36,11 @@ function EditModal({ slides, filename, onClose }) {
       })
   );
   const [imageFiles, setImageFiles] = useState({});
-  const [downloading, setDownloading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [jsonErrors, setJsonErrors] = useState({});
   const [selectedImageId, setSelectedImageId] = useState(null);
   const [uploadedImageName, setUploadedImageName] = useState('');
+  const [templateName, setTemplateName] = useState(initialTemplateName || '');
 
   const handleJsonChange = (slideIndex, value) => {
     const newJsons = [...slideJsons];
@@ -75,16 +85,7 @@ function EditModal({ slides, filename, onClose }) {
     }
   };
   
-  const handleClearUploads = async () => {
-    try {
-      const response = await axios.post('/api/clear-uploads');
-      alert('Upload folder cleared successfully!');
-      setUploadedImageName('');
-      setImageFiles({});
-    } catch (error) {
-      alert('Error clearing uploads: ' + error.message);
-    }
-  };
+  // Image upload handling only, clear uploads moved to main page
 
 
   const handleEditData = async (slideIndex) => {
@@ -102,7 +103,11 @@ function EditModal({ slides, filename, onClose }) {
       const displaySlide = {
         ...updatedSlide,
         elements: updatedSlide.elements.map(el => 
-          el.type === 'image' ? { ...el, src: el.src.length > 50 ? '[IMAGE_URL]' : el.src } : el
+          el.type === 'image' ? { 
+            ...el, 
+            displaySrc: el.fullPath || (el.src.startsWith('/') ? el.src : `/uploads/${el.src}`),
+            src: el.src 
+          } : el
         )
       };
       
@@ -115,44 +120,55 @@ function EditModal({ slides, filename, onClose }) {
     }
   };
 
-  const handleDownload = async () => {
+  const handleSave = async () => {
     // Check for JSON errors
     if (Object.keys(jsonErrors).length > 0) {
-      alert('Please fix JSON errors before downloading');
+      alert('Please fix JSON errors before saving');
       return;
     }
     
-    setDownloading(true);
+    if (!templateName.trim()) {
+      alert('Please enter a template name');
+      return;
+    }
+    
+    setSaving(true);
     
     try {
-      const formData = new FormData();
-      formData.append('slides', JSON.stringify(editedSlides));
-      formData.append('filename', filename);
+      // Ensure all image paths are properly preserved
+      const processedSlides = editedSlides.map(slide => ({
+        ...slide,
+        elements: slide.elements.map(el => {
+          if (el.type === 'image') {
+            // Ensure src is preserved correctly
+            return {
+              ...el,
+              // Keep original src if it exists
+              src: el.originalSrc || el.src,
+              // Store the full path for backend access
+              fullPath: el.fullPath || (el.src.startsWith('/') ? el.src : `/uploads/${el.src}`)
+            };
+          }
+          return el;
+        })
+      }));
       
-      Object.entries(imageFiles).forEach(([key, file]) => {
-        formData.append(key, file);
+      // Check if we're editing an existing template (initialTemplateName is set)
+      // or creating a new one
+      const response = await axios.post('/api/save-template', {
+        templateName: templateName.trim(),
+        slides: processedSlides
       });
-
-      const response = await axios.post('/api/generate', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        responseType: 'blob'
-      });
-
-      const url = window.URL.createObjectURL(new Blob([response.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', 'updated-presentation.pptx');
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
       
+      alert(response.data.message);
     } catch (error) {
-      alert('Error generating file: ' + error.message);
+      alert('Error saving template: ' + error.message);
     } finally {
-      setDownloading(false);
+      setSaving(false);
     }
   };
+
+  // Download functionality moved to App.js
 
 
 
@@ -161,14 +177,8 @@ function EditModal({ slides, filename, onClose }) {
       <div className="bg-white rounded-lg max-w-7xl w-full h-[95vh] flex flex-col">
         <div className="p-4 border-b sticky top-0 bg-white z-10">
           <div className="flex justify-between items-center">
-            <h2 className="text-xl font-bold">Edit Presentation</h2>
+            <h2 className="text-xl font-bold">{initialTemplateName ? 'Edit Template' : 'Edit Presentation'}</h2>
             <div className="flex items-center space-x-2">
-              <button
-                onClick={handleClearUploads}
-                className="bg-red-500 text-white px-3 py-1 rounded text-sm hover:bg-red-600"
-              >
-                Clear Uploads
-              </button>
               <label className="bg-green-600 text-white px-3 py-1 rounded text-sm cursor-pointer hover:bg-green-700">
                 Upload Image
                 <input
@@ -181,6 +191,20 @@ function EditModal({ slides, filename, onClose }) {
               <button onClick={onClose} className="text-gray-500 hover:text-gray-700 text-2xl">×</button>
             </div>
           </div>
+          
+          {/* Template Name Input */}
+          <div className="mt-3">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Template Name</label>
+            <textarea
+              value={templateName}
+              onChange={(e) => setTemplateName(e.target.value)}
+              placeholder="Enter template name (optional)"
+              className="w-full p-2 border border-gray-300 rounded-md text-sm"
+              rows="1"
+            />
+            <p className="text-xs text-gray-500 mt-1">This name will be used for the downloaded file</p>
+          </div>
+          
           {uploadedImageName && (
             <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-sm">
               <span className="font-medium">Uploaded image:</span> {uploadedImageName}
@@ -253,11 +277,11 @@ function EditModal({ slides, filename, onClose }) {
               Cancel
             </button>
             <button
-              onClick={handleDownload}
-              disabled={downloading}
-              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-400"
+              onClick={handleSave}
+              disabled={saving || !templateName.trim()}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400"
             >
-              {downloading ? 'Generating...' : 'Download Updated PPTX'}
+              {saving ? 'Saving...' : 'Save Template'}
             </button>
           </div>
         </div>
