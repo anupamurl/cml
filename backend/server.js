@@ -72,7 +72,12 @@ async function parsePptx(filePath) {
     const slides = [];
     const slideFiles = Object.keys(contents.files)
       .filter(name => name.startsWith('ppt/slides/slide') && name.endsWith('.xml'))
-      .sort();
+      .sort((a, b) => {
+        // Extract slide numbers and sort numerically
+        const numA = parseInt(a.match(/slide(\d+)\.xml/)[1]);
+        const numB = parseInt(b.match(/slide(\d+)\.xml/)[1]);
+        return numA - numB;
+      });
     
     // Get relationships for images
     const relsFiles = Object.keys(contents.files)
@@ -491,6 +496,10 @@ async function processImageForPptx(contents, imagePath, slideIndex, element) {
   // Ensure slideIndex is a number and use actual slide ID
   const slideId = parseInt(slideIndex) + 1; // Convert to 1-based slide ID
   console.log(`Processing image for slide ${slideId} from path ${imagePath}`);
+  
+  // Add a small delay to ensure proper processing
+  await new Promise(resolve => setTimeout(resolve, 50));
+  
   try {
     // Read the image file
     const imageData = fs.readFileSync(imagePath);
@@ -920,8 +929,11 @@ app.post('/api/save-template', async (req, res) => {
     
     const slidesData = typeof slides === 'string' ? JSON.parse(slides) : slides;
     
+    // Ensure slides are sorted by ID
+    const sortedSlides = [...slidesData].sort((a, b) => a.id - b.id);
+    
     // Format slides for MongoDB storage
-    const formattedSlides = slidesData.map(slide => ({
+    const formattedSlides = sortedSlides.map(slide => ({
       slideNo: slide.id,
       slideContent: slide
     }));
@@ -971,8 +983,10 @@ app.get('/api/templates/:id', async (req, res) => {
       return res.status(404).json({ error: 'Template not found' });
     }
     
-    // Format slides for frontend
-    const slides = template.slides.map(slide => slide.slideContent);
+    // Format slides for frontend and ensure they're sorted by slideNo
+    const slides = template.slides
+      .sort((a, b) => a.slideNo - b.slideNo)
+      .map(slide => slide.slideContent);
     
     res.json({ 
       success: true, 
@@ -1059,6 +1073,9 @@ app.get('/api/generate-template/:id', async (req, res) => {
     // Create a new PPTX with the same structure as the original
     const originalSlides = await parsePptx(baseFilePath);
     
+    // Sort slides numerically by ID to ensure correct order for slides > 9
+    slidesData.sort((a, b) => parseInt(a.id) - parseInt(b.id));
+    
     // Update slides with template data
     for (let i = 0; i < slidesData.length; i++) {
       const slideData = slidesData[i];
@@ -1114,6 +1131,9 @@ app.get('/api/generate-template/:id', async (req, res) => {
             const imagePath = await findImageFile(element.src);
             
             if (imagePath) {
+              // Add a small delay to ensure proper processing for large presentations
+              await new Promise(resolve => setTimeout(resolve, 50));
+              
               // Pass the original element for position reference
               await processImageForPptx(contents, imagePath, slideId - 1, {
                 ...element,
@@ -1124,6 +1144,9 @@ app.get('/api/generate-template/:id', async (req, res) => {
                 originalWidth: element.originalWidth,
                 originalHeight: element.originalHeight
               });
+              
+              // Add another small delay after processing
+              await new Promise(resolve => setTimeout(resolve, 50));
             } else {
               console.warn(`Image not found for element: ${element.src}`);
             }
@@ -1151,16 +1174,21 @@ app.get('/api/generate-template/:id', async (req, res) => {
     const { fixPptxImageDimensions } = require('./fix-pptx');
     await fixPptxImageDimensions(tempPath, outputPath);
     
+    // Add a delay to ensure file is fully written and processed
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     // Clean up the temporary file
-    fs.unlink(tempPath, () => {});
+    await new Promise((resolve) => fs.unlink(tempPath, resolve));
     
     // Send the fixed file
     res.download(outputPath, `${template.templateName}.pptx`, (err) => {
       if (err) {
         console.error('Download error:', err);
       }
-      // Clean up the output file
-      fs.unlink(outputPath, () => {});
+      // Add a delay before cleanup to ensure download completes
+      setTimeout(() => {
+        fs.unlink(outputPath, () => {});
+      }, 1000);
     });
   } catch (error) {
     console.error('Generate template error:', error);
@@ -1293,6 +1321,10 @@ app.post('/api/generate', upload.any(), async (req, res) => {
             
             if (imagePath) {
               console.log(`Processing image from path: ${imagePath}`);
+              
+              // Add a small delay to ensure proper processing for large presentations
+              await new Promise(resolve => setTimeout(resolve, 50));
+              
               // Replace the image in the PPTX using the correct slide ID
               await processImageForPptx(contents, imagePath, slideId - 1, {
                 ...element,
@@ -1303,6 +1335,9 @@ app.post('/api/generate', upload.any(), async (req, res) => {
                 originalWidth: element.originalWidth,
                 originalHeight: element.originalHeight
               });
+              
+              // Add another small delay after processing
+              await new Promise(resolve => setTimeout(resolve, 50));
             } else {
               console.warn(`Image not found for element: ${element.src}`);
             }
@@ -1336,10 +1371,16 @@ app.post('/api/generate', upload.any(), async (req, res) => {
     const { fixPptxImageDimensions } = require('./fix-pptx');
     await fixPptxImageDimensions(tempPath, outputPath);
     
+    // Add a delay to ensure file is fully written and processed
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     // Clean up the temporary file
-    fs.unlink(tempPath, () => {});
+    await new Promise((resolve) => fs.unlink(tempPath, resolve));
     
     console.log(`PPTX file saved to ${outputPath}`);
+    
+    // Add another delay before sending the file
+    await new Promise(resolve => setTimeout(resolve, 200));
     
     // Use template name for the downloaded file if provided
     const downloadFilename = templateName ? `${templateName}.pptx` : 'updated-presentation.pptx';
@@ -1347,17 +1388,20 @@ app.post('/api/generate', upload.any(), async (req, res) => {
       if (err) {
         console.error('Download error:', err);
       }
-      // Clean up files
-      fs.unlink(outputPath, () => {});
-      // Don't delete uploaded images as they might be needed for future edits
-      // Only delete temporary files uploaded during this request
-      if (req.files && req.files.length > 0) {
-        req.files.forEach(file => {
-          if (file && file.path) {
-            fs.unlink(file.path, () => {});
-          }
-        });
-      }
+      // Add a delay before cleanup to ensure download completes
+      setTimeout(() => {
+        // Clean up files
+        fs.unlink(outputPath, () => {});
+        // Don't delete uploaded images as they might be needed for future edits
+        // Only delete temporary files uploaded during this request
+        if (req.files && req.files.length > 0) {
+          req.files.forEach(file => {
+            if (file && file.path) {
+              fs.unlink(file.path, () => {});
+            }
+          });
+        }
+      }, 1000);
     });
     
   } catch (error) {

@@ -24,7 +24,9 @@ function App() {
     setEditingTemplate(templateId);
     try {
       const response = await axios.get(`/api/templates/${templateId}`);
-      setSlides(response.data.slides);
+      // Ensure slides are properly sorted by ID
+      const sortedSlides = [...response.data.slides].sort((a, b) => a.id - b.id);
+      setSlides(sortedSlides);
       setFilename(''); // No filename for template editing
       setTemplateName(response.data.templateName);
       setShowModal(true);

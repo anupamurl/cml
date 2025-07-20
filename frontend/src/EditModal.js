@@ -1,39 +1,41 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import axios from 'axios';
 
 function EditModal({ slides, filename, initialTemplateName, onClose }) {
-  const [editedSlides, setEditedSlides] = useState(
-    [...slides]
+  // Ensure slides are properly sorted by ID and handle potential missing properties
+  const processedSlides = useMemo(() => {
+    return [...slides]
       .sort((a, b) => a.id - b.id)
       .map(slide => ({
         ...slide,
-        elements: slide.elements.map(el => ({
+        elements: Array.isArray(slide.elements) ? slide.elements.map(el => ({
           ...el,
           // Store original position and dimensions for exact preservation
           originalX: el.x,
           originalY: el.y,
           originalWidth: el.width,
           originalHeight: el.height
-        }))
-      }))
-  );
+        })) : []
+      }));
+  }, [slides]);
+  
+  const [editedSlides, setEditedSlides] = useState(processedSlides);
+  
   const [slideJsons, setSlideJsons] = useState(
-    [...slides]
-      .sort((a, b) => a.id - b.id)
-      .map(slide => {
-        const cleanSlide = {
-          ...slide,
-          elements: slide.elements.map(el => {
-            if (el.type === 'image') {
-              // Use fullPath if available, otherwise use src
-              const displaySrc = el.fullPath || (el.src.startsWith('/') ? el.src : `/uploads/${el.src}`);
-              return { ...el, displaySrc, src: el.src };
-            }
-            return el;
-          })
-        };
-        return JSON.stringify(cleanSlide, null, 2);
-      })
+    processedSlides.map(slide => {
+      const cleanSlide = {
+        ...slide,
+        elements: Array.isArray(slide.elements) ? slide.elements.map(el => {
+          if (el.type === 'image') {
+            // Use fullPath if available, otherwise use src
+            const displaySrc = el.fullPath || (el.src?.startsWith('/') ? el.src : `/uploads/${el.src}`);
+            return { ...el, displaySrc, src: el.src };
+          }
+          return el;
+        }) : []
+      };
+      return JSON.stringify(cleanSlide, null, 2);
+    })
   );
   const [imageFiles, setImageFiles] = useState({});
   const [saving, setSaving] = useState(false);
@@ -221,13 +223,7 @@ function EditModal({ slides, filename, initialTemplateName, onClose }) {
           {console.log('Edited slide IDs:', editedSlides.map(s => s.id))}
           
           {/* Use numeric sort by ID to ensure correct sequence */}
-          {[...slides].sort((a, b) => a.id - b.id).map((originalSlide) => {
-            const slide = editedSlides.find(s => s.id === originalSlide.id);
-            const slideIndex = editedSlides.findIndex(s => s.id === originalSlide.id);
-            if (!slide) {
-              console.log(`Missing slide with ID ${originalSlide.id}`);
-              return null;
-            }
+          {editedSlides.map((slide, slideIndex) => {
             return (
             <div key={slide.id} className="border rounded-lg p-4">
               <div className="flex justify-between items-center mb-4">
