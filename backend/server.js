@@ -9,6 +9,7 @@ const xml2js = require('xml2js');
 const sharp = require('sharp');
 const mongoose = require('mongoose');
 const { insertImageIntoSlide } = require('./insertImage');
+const { generateShape } = require('./shapeGenerator');
 require('dotenv').config();
 
 const app = express();
@@ -1046,11 +1047,8 @@ app.get('/api/generate-template/:id', async (req, res) => {
                 fontSize: 14
               });
             } else if (element.type === 'shape') {
-              // For shape elements, return a red circle SVG
-              const svgPath = `uploads/shape_${Date.now()}.svg`;
-              fs.writeFileSync(svgPath, `<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
-                <circle cx="50" cy="50" r="40" stroke="black" stroke-width="2" fill="red" />
-              </svg>`);
+              // For shape elements, generate a segmented circle SVG
+              const svgPath = generateShape('shape');
               
               slide.addImage({
                 path: svgPath,
@@ -1140,13 +1138,10 @@ app.get('/api/generate-template/:id', async (req, res) => {
             );
           }
           
-          // If element type is shape, create and add a red circle SVG
+          // If element type is shape, create and add a segmented circle SVG
           if (element.type === 'shape') {
-            // Create a temporary SVG file
-            const svgPath = `uploads/shape_${Date.now()}.svg`;
-            fs.writeFileSync(svgPath, `<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
-              <circle cx="50" cy="50" r="40" stroke="black" stroke-width="2" fill="red" />
-            </svg>`);
+            // Generate the SVG shape
+            const svgPath = generateShape('shape');
             
             // Add the SVG as an image to the slide
             await processImageForPptx(contents, svgPath, slideId - 1, {
