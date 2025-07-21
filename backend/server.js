@@ -1251,30 +1251,67 @@ app.get('/api/generate-template/:id', async (req, res) => {
             );
           }
           
-          // If element type is shape, create and add a segmented circle SVG
+          // If element type is shape, add SVG image to the slide
           if (element.type === 'shape') {
-            // Generate the SVG shape
-            const svgPath = generateShape('shape' , {
-  width: 200,
-  height: 200,
-  segments: [
-    { color: '#FF5733', percentage: 30 },
-    { color: '#33FF57', percentage: 20 },
-    { color: '#3357FF', percentage: 50 }
-  ],
-  centerText: '100%'
-} );
-            
-            // Add the SVG as an image to the slide
-            await processImageForPptx(contents, svgPath, slideId - 1, {
-              ...element,
-              originalElement: originalElement || null
-            });
-            
-            // Clean up the temporary SVG file after a delay
-            setTimeout(() => {
-              try { fs.unlinkSync(svgPath); } catch (e) {}
-            }, 1000);
+            try {
+              // Import the shape generator
+              const { generateShape } = require('./shapeGenerator');
+              
+              // Determine shape type (default to circle if not specified)
+              const shapeType = element.shapeType || 'pie';
+              
+              // Configure shape data using element properties
+              const shapeData = {
+                width: Math.max(element.width || 100, 50),  // Ensure minimum size
+                height: Math.max(element.height || 100, 50),
+                fillColor: element.fillColor || '#3498db'
+              };
+              
+              // Add specific data for pie charts if needed
+              if (shapeType === 'pie' || shapeType === 'segmentedCircle') {
+                shapeData.segments = element.segments || [
+                  { color: '#e74c3c', percentage: 30 },
+                  { color: '#3498db', percentage: 45 },
+                  { color: '#2ecc71', percentage: 25 }
+                ];
+              }
+              
+              // Generate SVG image
+              const svgPath = generateShape(shapeType, shapeData);
+              console.log(`Generated shape SVG at: ${svgPath}`);
+              
+              // Add a small delay to ensure file is written completely
+              await new Promise(resolve => setTimeout(resolve, 100));
+              
+              // Convert SVG to PNG for better compatibility
+              const pngPath = svgPath.replace('.svg', '.png');
+              const sharp = require('sharp');
+              await sharp(svgPath)
+                .resize(shapeData.width, shapeData.height)
+                .png()
+                .toFile(pngPath);
+              
+              console.log(`Converted to PNG at: ${pngPath}`);
+              
+              // Process image for PPTX using existing image handling code
+              await processImageForPptx(contents, pngPath, slideId - 1, {
+                ...element,
+                src: pngPath,
+                originalElement: originalElement || null
+              });
+              
+              // Clean up files after a longer delay
+              setTimeout(() => {
+                try { 
+                  fs.unlinkSync(svgPath);
+                  fs.unlinkSync(pngPath);
+                } catch (e) {
+                  console.error('Error cleaning up shape files:', e);
+                }
+              }, 5000);
+            } catch (error) {
+              console.error('Error processing shape:', error);
+            }
           }
           
           // Update text elements
