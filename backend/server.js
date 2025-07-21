@@ -1045,6 +1045,25 @@ app.get('/api/generate-template/:id', async (req, res) => {
                 h: element.height || 1,
                 fontSize: 14
               });
+            } else if (element.type === 'shape') {
+              // For shape elements, return a red circle SVG
+              const svgPath = `uploads/shape_${Date.now()}.svg`;
+              fs.writeFileSync(svgPath, `<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+                <circle cx="50" cy="50" r="40" stroke="black" stroke-width="2" fill="red" />
+              </svg>`);
+              
+              slide.addImage({
+                path: svgPath,
+                x: element.x,
+                y: element.y,
+                w: element.width || 2,
+                h: element.height || 2
+              });
+              
+              // Clean up the temporary SVG file after a delay
+              setTimeout(() => {
+                try { fs.unlinkSync(svgPath); } catch (e) {}
+              }, 1000);
             }
           }
         }
@@ -1119,6 +1138,26 @@ app.get('/api/generate-template/:id', async (req, res) => {
               Math.abs(el.x - element.x) < 1 && 
               Math.abs(el.y - element.y) < 1
             );
+          }
+          
+          // If element type is shape, create and add a red circle SVG
+          if (element.type === 'shape') {
+            // Create a temporary SVG file
+            const svgPath = `uploads/shape_${Date.now()}.svg`;
+            fs.writeFileSync(svgPath, `<svg width="100" height="100" xmlns="http://www.w3.org/2000/svg">
+              <circle cx="50" cy="50" r="40" stroke="black" stroke-width="2" fill="red" />
+            </svg>`);
+            
+            // Add the SVG as an image to the slide
+            await processImageForPptx(contents, svgPath, slideId - 1, {
+              ...element,
+              originalElement: originalElement || null
+            });
+            
+            // Clean up the temporary SVG file after a delay
+            setTimeout(() => {
+              try { fs.unlinkSync(svgPath); } catch (e) {}
+            }, 1000);
           }
           
           // Update text elements
