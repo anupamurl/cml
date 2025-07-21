@@ -1048,7 +1048,7 @@ app.get('/api/generate-template/:id', async (req, res) => {
               });
             } else if (element.type === 'shape') {
               // For shape elements, generate a segmented circle SVG
-              const svgPath = generateShape('shape');
+              const svgPath = generateShape('shape' );
               
               slide.addImage({
                 path: svgPath,
@@ -1141,7 +1141,16 @@ app.get('/api/generate-template/:id', async (req, res) => {
           // If element type is shape, create and add a segmented circle SVG
           if (element.type === 'shape') {
             // Generate the SVG shape
-            const svgPath = generateShape('shape');
+            const svgPath = generateShape('shape' , {
+  width: 200,
+  height: 200,
+  segments: [
+    { color: '#FF5733', percentage: 30 },
+    { color: '#33FF57', percentage: 20 },
+    { color: '#3357FF', percentage: 50 }
+  ],
+  centerText: '100%'
+} );
             
             // Add the SVG as an image to the slide
             await processImageForPptx(contents, svgPath, slideId - 1, {
