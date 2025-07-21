@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import axios from 'axios';
 
-function EditModal({ slides, filename, initialTemplateName, onClose }) {
+function EditModal({ slides, filename, initialTemplateName, originalFilePath, onClose }) {
   // Ensure slides are properly sorted by ID and handle potential missing properties
   const processedSlides = useMemo(() => {
     return [...slides]
@@ -159,7 +159,9 @@ function EditModal({ slides, filename, initialTemplateName, onClose }) {
       // or creating a new one
       const response = await axios.post('/api/save-template', {
         templateName: templateName.trim(),
-        slides: processedSlides
+        slides: processedSlides,
+        filename: filename, // Pass the original filename if available
+        originalPath: originalFilePath // Pass the original path if available
       });
       
       alert(response.data.message);

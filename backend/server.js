@@ -27,6 +27,7 @@ const templateSchema = new mongoose.Schema({
     slideNo: Number,
     slideContent: Object
   }],
+  originalFilePath: { type: String },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -799,10 +800,19 @@ app.post('/api/upload', upload.single('pptx'), async (req, res) => {
       return res.status(400).json({ error: 'No file uploaded' });
     }
     
+    // Create a copy of the original file with a unique name to ensure each template has its own file
+    const uniqueFilename = `original_${Date.now()}_${req.file.originalname}`;
+    const uniqueFilePath = path.join('uploads', uniqueFilename);
+    
+    // Copy the uploaded file to the unique path
+    fs.copyFileSync(req.file.path, uniqueFilePath);
+    console.log(`Created unique copy of original file: ${uniqueFilePath}`);
+    
     const slides = await parsePptx(req.file.path);
     
-    // Store original file reference
-    originalFiles.set(req.file.filename, req.file.path);
+    // Store original file reference using the unique path
+    originalFiles.set(req.file.filename, uniqueFilePath);
+    console.log(`Stored original file reference: ${req.file.filename} -> ${uniqueFilePath}`);
     
     console.log(`Parsed ${slides.length} slides:`);
     slides.forEach((slide, i) => {
@@ -825,6 +835,7 @@ app.post('/api/upload', upload.single('pptx'), async (req, res) => {
     res.json({
       success: true,
       filename: req.file.filename,
+      originalPath: uniqueFilePath,
       slides: slides
     });
   } catch (error) {
@@ -922,7 +933,7 @@ const originalFiles = new Map();
 // Save template to MongoDB
 app.post('/api/save-template', async (req, res) => {
   try {
-    const { templateName, slides } = req.body;
+    const { templateName, slides, filename, originalPath } = req.body;
     
     if (!templateName) {
       return res.status(400).json({ error: 'Template name is required' });
@@ -939,23 +950,45 @@ app.post('/api/save-template', async (req, res) => {
       slideContent: slide
     }));
     
+    // Get original file path if available
+    let originalFilePath = originalPath;
+    if (!originalFilePath && filename && originalFiles.has(filename)) {
+      originalFilePath = originalFiles.get(filename);
+    }
+    
+    console.log('Saving template with original file path:', originalFilePath);
+    
     // Check if template with this name already exists
     let template = await Template.findOne({ templateName });
     
     if (template) {
       // Update existing template
       template.slides = formattedSlides;
+      if (originalFilePath) {
+        template.originalFilePath = originalFilePath;
+      }
       template.updatedAt = Date.now();
       await template.save();
-      res.json({ success: true, message: 'Template updated successfully', templateId: template._id });
+      res.json({ 
+        success: true, 
+        message: 'Template updated successfully', 
+        templateId: template._id,
+        originalFilePath: template.originalFilePath
+      });
     } else {
       // Create new template
       template = new Template({
         templateName,
-        slides: formattedSlides
+        slides: formattedSlides,
+        originalFilePath: originalFilePath
       });
       await template.save();
-      res.json({ success: true, message: 'Template saved successfully', templateId: template._id });
+      res.json({ 
+        success: true, 
+        message: 'Template saved successfully', 
+        templateId: template._id,
+        originalFilePath: template.originalFilePath
+      });
     }
   } catch (error) {
     console.error('Save template error:', error);
@@ -966,8 +999,23 @@ app.post('/api/save-template', async (req, res) => {
 // Get all templates
 app.get('/api/templates', async (req, res) => {
   try {
-    const templates = await Template.find().select('templateName createdAt').sort('-createdAt');
-    res.json({ success: true, templates });
+    const templates = await Template.find().sort('-createdAt');
+    
+    // Add slide count and hasOriginalFile flag to each template
+    const templatesWithCount = templates.map(template => {
+      const slideCount = template.slides ? template.slides.length : 0;
+      const hasOriginalFile = !!template.originalFilePath && fs.existsSync(template.originalFilePath);
+      
+      return {
+        _id: template._id,
+        templateName: template.templateName,
+        createdAt: template.createdAt,
+        slideCount: slideCount,
+        hasOriginalFile: hasOriginalFile
+      };
+    });
+    
+    res.json({ success: true, templates: templatesWithCount });
   } catch (error) {
     console.error('Get templates error:', error);
     res.status(500).json({ error: 'Failed to get templates' });
@@ -989,14 +1037,58 @@ app.get('/api/templates/:id', async (req, res) => {
       .sort((a, b) => a.slideNo - b.slideNo)
       .map(slide => slide.slideContent);
     
+    // Check if the original file exists
+    const hasOriginalFile = !!template.originalFilePath && fs.existsSync(template.originalFilePath);
+    
     res.json({ 
       success: true, 
       templateName: template.templateName,
-      slides: slides
+      slides: slides,
+      hasOriginalFile: hasOriginalFile
     });
   } catch (error) {
     console.error('Get template by ID error:', error);
     res.status(500).json({ error: 'Failed to get template' });
+  }
+});
+
+// Download original file
+app.get('/api/download-original/:id', async (req, res) => {
+  try {
+    const templateId = req.params.id;
+    const template = await Template.findById(templateId);
+    
+    if (!template) {
+      return res.status(404).json({ error: 'Template not found' });
+    }
+    
+    console.log(`Template ${template.templateName} original file path:`, template.originalFilePath);
+    
+    if (!template.originalFilePath) {
+      return res.status(404).json({ error: 'Original file path not found in database' });
+    }
+    
+    if (!fs.existsSync(template.originalFilePath)) {
+      return res.status(404).json({ error: `Original file not found at path: ${template.originalFilePath}` });
+    }
+    
+    // Get the original filename
+    const originalFilename = path.basename(template.originalFilePath);
+    // Add template name and timestamp to ensure uniqueness
+    const downloadFilename = `${template.templateName}_original_${Date.now()}.${originalFilename.split('.').pop()}`;
+    
+    console.log(`Sending file: ${originalFilename} as ${downloadFilename}`);
+    
+    // Send the file
+    res.download(template.originalFilePath, downloadFilename, (err) => {
+      if (err) {
+        console.error('Download error:', err);
+        res.status(500).send(`Download error: ${err.message}`);
+      }
+    });
+  } catch (error) {
+    console.error('Download original file error:', error);
+    res.status(500).json({ error: `Failed to download original file: ${error.message}` });
   }
 });
 
@@ -1011,16 +1103,26 @@ app.get('/api/generate-template/:id', async (req, res) => {
     }
     
     // Instead of creating a new PPTX from scratch, we'll use the same approach as /api/generate
-    // First, find a suitable base PPTX file to use as a template
+    // First, check if this template has an original file path
     const uploadDir = 'uploads';
     let baseFilePath = null;
     
-    if (fs.existsSync(uploadDir)) {
+    // If the template has an original file path, use it as the base
+    if (template.originalFilePath && fs.existsSync(template.originalFilePath)) {
+      baseFilePath = template.originalFilePath;
+      console.log(`Using template's original file: ${baseFilePath}`);
+    } 
+    // Otherwise find a suitable base PPTX file
+    else if (fs.existsSync(uploadDir)) {
+      // Create a copy of a base file with a unique name for this request
       const files = fs.readdirSync(uploadDir);
-      // Find the first PPTX file to use as a base
       for (const file of files) {
         if (file.endsWith('.pptx')) {
-          baseFilePath = path.join(uploadDir, file);
+          const originalFile = path.join(uploadDir, file);
+          const uniqueBasePath = path.join(uploadDir, `base_${template._id}_${Date.now()}.pptx`);
+          fs.copyFileSync(originalFile, uniqueBasePath);
+          baseFilePath = uniqueBasePath;
+          console.log(`Created unique base file: ${baseFilePath}`);
           break;
         }
       }
@@ -1090,17 +1192,28 @@ app.get('/api/generate-template/:id', async (req, res) => {
     // Create a new PPTX with the same structure as the original
     const originalSlides = await parsePptx(baseFilePath);
     
+    // Get a list of available slide files in the PPTX
+    const availableSlideFiles = Object.keys(contents.files)
+      .filter(name => name.startsWith('ppt/slides/slide') && name.endsWith('.xml'))
+      .sort((a, b) => {
+        const numA = parseInt(a.match(/slide(\d+)\.xml/)[1]);
+        const numB = parseInt(b.match(/slide(\d+)\.xml/)[1]);
+        return numA - numB;
+      });
+    
+    console.log(`Available slides in PPTX: ${availableSlideFiles.map(f => f.match(/slide(\d+)\.xml/)[1]).join(', ')}`);
+    
     // Sort slides numerically by ID to ensure correct order for slides > 9
     slidesData.sort((a, b) => parseInt(a.id) - parseInt(b.id));
     
-    // Update slides with template data
-    for (let i = 0; i < slidesData.length; i++) {
+    // Update slides with template data, but only for slides that exist in the PPTX
+    for (let i = 0; i < Math.min(slidesData.length, availableSlideFiles.length); i++) {
       const slideData = slidesData[i];
-      // Use the actual slide ID from the data
-      const slideId = slideData.id || (i + 1);
+      // Use the slide number from the available files instead of the template ID
+      const slideFile = availableSlideFiles[i];
+      const slideId = parseInt(slideFile.match(/slide(\d+)\.xml/)[1]);
       
-      // Find the corresponding slide file
-      const slideFile = `ppt/slides/slide${slideId}.xml`;
+      console.log(`Processing template slide ${i+1} (ID: ${slideData.id}) with PPTX slide ${slideId}`);
       
       if (!contents.files[slideFile]) {
         console.warn(`Slide file not found: ${slideFile}`);
@@ -1208,9 +1321,13 @@ app.get('/api/generate-template/:id', async (req, res) => {
       compressionOptions: { level: 6 }
     });
     
-    // Save to temporary file and fix image dimensions
-    const tempPath = `uploads/temp-${template.templateName}-${Date.now()}.pptx`;
-    const outputPath = `uploads/${template.templateName}-${Date.now()}.pptx`;
+    // Generate truly unique identifier for this specific request
+    const uuid = require('crypto').randomUUID ? require('crypto').randomUUID() : 
+                 `${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
+    
+    // Create unique filenames with template ID and UUID to guarantee uniqueness
+    const tempPath = `uploads/temp-${template._id}-${uuid}.pptx`;
+    const outputPath = `uploads/${template._id}-${uuid}.pptx`;
     fs.writeFileSync(tempPath, updatedBuffer);
     
     // Fix image dimensions in the generated PPTX
@@ -1223,8 +1340,27 @@ app.get('/api/generate-template/:id', async (req, res) => {
     // Clean up the temporary file
     await new Promise((resolve) => fs.unlink(tempPath, resolve));
     
-    // Send the fixed file
-    res.download(outputPath, `${template.templateName}.pptx`, (err) => {
+    // Clean up the unique base file if we created one
+    if (baseFilePath && baseFilePath.includes('base_') && fs.existsSync(baseFilePath)) {
+      try {
+        fs.unlinkSync(baseFilePath);
+        console.log(`Cleaned up base file: ${baseFilePath}`);
+      } catch (e) {
+        console.warn(`Failed to clean up base file: ${e.message}`);
+      }
+    }
+    
+    // Set cache-control headers to prevent browser caching
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Content-Disposition', `attachment; filename="${template.templateName}_${template._id}_${uuid}.pptx"`);
+    res.setHeader('X-Template-ID', template._id.toString());
+    
+    // Send the file with the unique identifier in both the file path and the download filename
+    const downloadFilename = `${template.templateName}_${template._id}_${uuid}.pptx`;
+    console.log(`Sending file: ${outputPath} as ${downloadFilename}`);
+    res.download(outputPath, downloadFilename, (err) => {
       if (err) {
         console.error('Download error:', err);
       }

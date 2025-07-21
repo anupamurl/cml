@@ -14,6 +14,7 @@ function App() {
   const [downloading, setDownloading] = useState(false);
   const [deletingTemplate, setDeletingTemplate] = useState(null);
   const [editingTemplate, setEditingTemplate] = useState(null);
+  const [originalPath, setOriginalPath] = useState('');
 
   const handleFileChange = (e) => {
     setFile(e.target.files[0]);
@@ -36,6 +37,40 @@ function App() {
       setEditingTemplate(null);
     }
   };
+  
+  // Handle original file download
+  const handleDownloadOriginal = async (templateId) => {
+    try {
+      // First check if the file exists
+      const checkResponse = await axios.get(`/api/templates/${templateId}`);
+      
+      if (!checkResponse.data.hasOriginalFile) {
+        alert('No original file available for this template');
+        return;
+      }
+      
+      // Use direct URL for file download with timestamp to prevent caching
+      const timestamp = new Date().getTime();
+      const downloadUrl = `/api/download-original/${templateId}?t=${timestamp}`;
+      
+      // Create a hidden iframe for download to avoid page navigation
+      const iframe = document.createElement('iframe');
+      iframe.style.display = 'none';
+      iframe.src = downloadUrl;
+      document.body.appendChild(iframe);
+      
+      // Remove the iframe after a delay
+      setTimeout(() => {
+        document.body.removeChild(iframe);
+      }, 2000);
+    } catch (error) {
+      if (error.response && error.response.data && error.response.data.error) {
+        alert('Error: ' + error.response.data.error);
+      } else {
+        alert('Error downloading original file: ' + error.message);
+      }
+    }
+  };
 
   // Presentations fetching removed as we no longer display them
   
@@ -53,14 +88,17 @@ function App() {
   const handleDownloadTemplate = async (templateId, templateName) => {
     setDownloading(templateId);
     try {
-      const response = await axios.get(`/api/generate-template/${templateId}`, {
+      // Add timestamp to ensure unique downloads each time
+      const timestamp = new Date().getTime();
+      const response = await axios.get(`/api/generate-template/${templateId}?t=${timestamp}`, {
         responseType: 'blob'
       });
       
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `${templateName}.pptx`);
+      // Add timestamp to filename to ensure uniqueness
+      link.setAttribute('download', `${templateName}_${timestamp}.pptx`);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -120,6 +158,7 @@ function App() {
       setSlides(response.data.slides);
       setFilename(response.data.filename);
       setTemplateName(''); // Reset template name for new uploads
+      setOriginalPath(response.data.originalPath); // Store the original path
       setShowModal(true);
     } catch (error) {
       alert('Error uploading file: ' + error.message);
@@ -188,6 +227,7 @@ function App() {
                   <thead className="bg-gray-50">
                     <tr>
                       <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Template Name</th>
+                      <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Slides</th>
                       <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Created Date</th>
                       <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                     </tr>
@@ -196,28 +236,70 @@ function App() {
                     {templates.map((template, index) => (
                       <tr key={template._id} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{template.templateName}</td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          <span className="bg-blue-100 text-blue-800 text-xs font-medium px-2.5 py-0.5 rounded-full">
+                            {template.slideCount || '?'} slides
+                          </span>
+                        </td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{new Date(template.createdAt).toLocaleString()}</td>
                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                           <button 
                             onClick={() => handleEditTemplate(template._id)}
                             disabled={editingTemplate === template._id}
                             className="text-blue-600 hover:text-blue-900 mr-3"
+                            title="Edit Template"
                           >
-                            {editingTemplate === template._id ? 'Loading...' : 'Edit'}
+                            {editingTemplate === template._id ? (
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            ) : (
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            )}
                           </button>
                           <button 
                             onClick={() => handleDownloadTemplate(template._id, template.templateName)}
                             disabled={downloading === template._id}
                             className="text-green-600 hover:text-green-900 mr-3"
+                            title="Download Template"
                           >
-                            {downloading === template._id ? 'Downloading...' : 'Download'}
+                            {downloading === template._id ? (
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            ) : (
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                              </svg>
+                            )}
+                          </button>
+                          <button 
+                            onClick={() => handleDownloadOriginal(template._id)}
+                            className={`${template.hasOriginalFile ? 'text-green-600 hover:text-green-900' : 'text-gray-400 cursor-not-allowed'} mr-3`}
+                            title={template.hasOriginalFile ? "Download Original File" : "No original file available"}
+                            disabled={!template.hasOriginalFile}
+                          >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                            </svg>
                           </button>
                           <button 
                             onClick={() => handleDeleteTemplate(template._id)}
                             disabled={deletingTemplate === template._id}
                             className="text-red-600 hover:text-red-900"
+                            title="Delete Template"
                           >
-                            {deletingTemplate === template._id ? 'Deleting...' : 'Delete'}
+                            {deletingTemplate === template._id ? (
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                              </svg>
+                            ) : (
+                              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            )}
                           </button>
                         </td>
                       </tr>
@@ -237,9 +319,11 @@ function App() {
           slides={slides}
           filename={filename}
           initialTemplateName={templateName}
+          originalFilePath={originalPath}
           onClose={() => {
             setShowModal(false);
             setTemplateName(''); // Reset template name
+            setOriginalPath(''); // Reset original path
             fetchTemplates(); // Refresh templates after editing
           }}
         />
