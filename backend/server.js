@@ -1257,46 +1257,35 @@ app.get('/api/generate-template/:id', async (req, res) => {
               // Import the shape generator
               const { generateShape } = require('./shapeGenerator');
               
-              // Determine shape type (default to circle if not specified)
-              const shapeType = element.shapeType || 'pie';
-              
-              // Configure shape data using element properties
+              // Configure shape data for donut chart
               const shapeData = {
-                width: Math.max(element.width || 100, 50),  // Ensure minimum size
-                height: Math.max(element.height || 100, 50),
-                fillColor: element.fillColor || '#3498db'
+                chartData: element.chartData || null,
+                size: Math.max(element.width || 300, 200) // Ensure minimum size
               };
               
-              // Add specific data for pie charts if needed
-              if (shapeType === 'pie' || shapeType === 'segmentedCircle') {
-                shapeData.segments = element.segments || [
-                  { color: '#e74c3c', percentage: 30 },
-                  { color: '#3498db', percentage: 45 },
-                  { color: '#2ecc71', percentage: 25 }
-                ];
-              }
-              
               // Generate SVG image
-              const svgPath = generateShape(shapeType, shapeData);
+              const svgPath = generateShape('donutchart', shapeData);
               console.log(`Generated shape SVG at: ${svgPath}`);
               
               // Add a small delay to ensure file is written completely
               await new Promise(resolve => setTimeout(resolve, 100));
               
-              // Convert SVG to PNG for better compatibility
+              // Convert SVG to PNG without resizing to preserve layout
               const pngPath = svgPath.replace('.svg', '.png');
               const sharp = require('sharp');
               await sharp(svgPath)
-                .resize(shapeData.width, shapeData.height)
                 .png()
                 .toFile(pngPath);
               
               console.log(`Converted to PNG at: ${pngPath}`);
               
               // Process image for PPTX using existing image handling code
+              // For donut charts, use a larger size to ensure text is visible
               await processImageForPptx(contents, pngPath, slideId - 1, {
                 ...element,
                 src: pngPath,
+                width: Math.max(element.width || 6, 6),  // Ensure minimum width
+                height: Math.max(element.height || 4, 4), // Ensure minimum height
                 originalElement: originalElement || null
               });
               

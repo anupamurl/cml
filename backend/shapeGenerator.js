@@ -1,212 +1,9 @@
 /**
- * Shape generator for PPTX editor
- * Generates SVG shapes for use in presentations
+ * Donut chart generator for PPTX editor
+ * Generates donut chart SVGs for use in presentations
  */
 const fs = require('fs');
 const path = require('path');
-
-/**
- * Generate a basic circle SVG
- * @param {string} outputPath - Path to save the SVG file
- * @param {Object} data - Configuration data for the circle
- * @param {number} data.width - Width of the SVG
- * @param {number} data.height - Height of the SVG
- * @param {string} data.fillColor - Fill color for the circle
- * @returns {string} - Path to the generated SVG file
- */
-function generateCircle(outputPath, data = {}) {
-  // Default values
-  const width = data.width || 100;
-  const height = data.height || 100;
-  const fillColor = data.fillColor || '#3498db';
-  
-  // Calculate center and radius
-  const cx = width / 2;
-  const cy = height / 2;
-  const radius = Math.min(cx, cy) - 5;
-  
-  // Create SVG content
-  const svgContent = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="${cx}" cy="${cy}" r="${radius}" stroke="black" stroke-width="1" fill="${fillColor}" />
-  </svg>`;
-  
-  fs.writeFileSync(outputPath, svgContent);
-  return outputPath;
-}
-
-/**
- * Generate a pie chart SVG
- * @param {string} outputPath - Path to save the SVG file
- * @param {Object} data - Configuration data for the pie
- * @param {number} data.width - Width of the SVG
- * @param {number} data.height - Height of the SVG
- * @param {Array} data.segments - Array of segment objects with color and percentage
- * @returns {string} - Path to the generated SVG file
- */
-function generatePie(outputPath, data = {}) {
-  // Default values
-  const width = data.width || 100;
-  const height = data.height || 100;
-  const segments = data.segments || [
-    { color: '#e74c3c', percentage: 30 },
-    { color: '#3498db', percentage: 45 },
-    { color: '#2ecc71', percentage: 25 }
-  ];
-  
-  // Calculate center and radius
-  const cx = width / 2;
-  const cy = height / 2;
-  const radius = Math.min(cx, cy) - 5;
-  
-  // Start SVG content
-  let svgContent = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">`;
-  
-  // Generate segments
-  let startAngle = 0;
-  segments.forEach(segment => {
-    const angle = (segment.percentage / 100) * 360;
-    const endAngle = startAngle + angle;
-    
-    // Convert angles to radians
-    const startRad = (startAngle - 90) * Math.PI / 180;
-    const endRad = (endAngle - 90) * Math.PI / 180;
-    
-    // Calculate points
-    const startX = cx + radius * Math.cos(startRad);
-    const startY = cy + radius * Math.sin(startRad);
-    const endX = cx + radius * Math.cos(endRad);
-    const endY = cy + radius * Math.sin(endRad);
-    
-    // Create path - large arc flag is 0 for arcs less than 180 degrees, 1 for arcs greater than 180 degrees
-    const largeArcFlag = angle > 180 ? 1 : 0;
-    
-    svgContent += `
-    <path d="M${cx},${cy} L${startX},${startY} A${radius},${radius} 0 ${largeArcFlag},1 ${endX},${endY} Z" fill="${segment.color}" stroke="black" stroke-width="1" />`;
-    
-    startAngle = endAngle;
-  });
-  
-  // Close the SVG tag
-  svgContent += `
-</svg>`;
-  
-  fs.writeFileSync(outputPath, svgContent);
-  return outputPath;
-}
-
-/**
- * Generate a right arrow SVG
- * @param {string} outputPath - Path to save the SVG file
- * @param {Object} data - Configuration data for the arrow
- * @param {number} data.width - Width of the SVG
- * @param {number} data.height - Height of the SVG
- * @param {string} data.fillColor - Fill color for the arrow
- * @returns {string} - Path to the generated SVG file
- */
-function generateRightArrow(outputPath, data = {}) {
-  // Default values
-  const width = data.width || 100;
-  const height = data.height || 50;
-  const fillColor = data.fillColor || '#3498db';
-  
-  // Calculate dimensions
-  const arrowHeadWidth = height * 0.8;
-  const arrowBodyHeight = height * 0.4;
-  const arrowBodyWidth = width - arrowHeadWidth;
-  const arrowBodyY = (height - arrowBodyHeight) / 2;
-  
-  // Create SVG content for right-pointing arrow
-  const svgContent = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-    <path d="
-      M 0,${arrowBodyY}
-      L ${arrowBodyWidth},${arrowBodyY}
-      L ${arrowBodyWidth},${arrowBodyY - arrowBodyHeight/2}
-      L ${width},${height/2}
-      L ${arrowBodyWidth},${arrowBodyY + arrowBodyHeight + arrowBodyHeight/2}
-      L ${arrowBodyWidth},${arrowBodyY + arrowBodyHeight}
-      L 0,${arrowBodyY + arrowBodyHeight}
-      Z
-    " fill="${fillColor}" stroke="black" stroke-width="1" />
-  </svg>`;
-  
-  fs.writeFileSync(outputPath, svgContent);
-  return outputPath;
-}
-
-/**
- * Generate a circular segmented diagram SVG
- * @param {string} outputPath - Path to save the SVG file
- * @param {Object} data - Configuration data for the circle
- * @param {number} data.width - Width of the SVG
- * @param {number} data.height - Height of the SVG
- * @param {Array} data.segments - Array of segment objects with color and percentage
- * @param {string} data.centerText - Optional text to display in the center
- * @returns {string} - Path to the generated SVG file
- */
-function generateSegmentedCircle(outputPath, data = {}) {
-  // Default values
-  const width = data.width || 100;
-  const height = data.height || 100;
-  const segments = data.segments || [
-    { color: 'red', percentage: 45 },
-    { color: 'blue', percentage: 5 },
-    { color: 'green', percentage: 30 },
-    { color: 'orange', percentage: 20 }
-  ];
-  const centerText = data.centerText || '';
-  
-  // Calculate center and radius
-  const cx = width / 2;
-  const cy = height / 2;
-  const radius = Math.min(cx, cy) - 5;
-  const innerRadius = radius * 0.4;
-  
-  // Start SVG content
-  let svgContent = `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
-    <circle cx="${cx}" cy="${cy}" r="${radius}" stroke="black" stroke-width="1" fill="none" />`;
-  
-  // Generate segments
-  let startAngle = 0;
-  segments.forEach(segment => {
-    const angle = (segment.percentage / 100) * 360;
-    const endAngle = startAngle + angle;
-    
-    // Convert angles to radians
-    const startRad = (startAngle - 90) * Math.PI / 180;
-    const endRad = (endAngle - 90) * Math.PI / 180;
-    
-    // Calculate points
-    const startX = cx + radius * Math.cos(startRad);
-    const startY = cy + radius * Math.sin(startRad);
-    const endX = cx + radius * Math.cos(endRad);
-    const endY = cy + radius * Math.sin(endRad);
-    
-    // Create path - large arc flag is 0 for arcs less than 180 degrees, 1 for arcs greater than 180 degrees
-    const largeArcFlag = angle > 180 ? 1 : 0;
-    
-    svgContent += `
-    <path d="M${cx},${cy} L${startX},${startY} A${radius},${radius} 0 ${largeArcFlag},1 ${endX},${endY} Z" fill="${segment.color}" stroke="black" stroke-width="1" />`;
-    
-    startAngle = endAngle;
-  });
-  
-  // Add inner circle
-  svgContent += `
-    <circle cx="${cx}" cy="${cy}" r="${innerRadius}" stroke="black" stroke-width="1" fill="white" />`;
-  
-  // Add center text if provided
-  if (centerText) {
-    svgContent += `
-    <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" font-size="${innerRadius/2}px">${centerText}</text>`;
-  }
-  
-  // Close the SVG tag
-  svgContent += `
-</svg>`;
-  
-  fs.writeFileSync(outputPath, svgContent);
-  return outputPath;
-}
 
 /**
  * Generate an SVG shape based on type
@@ -224,28 +21,120 @@ function generateShape(type, data = {}) {
   // Generate a unique filename
   const svgPath = path.join(uploadsDir, `shape_${Date.now()}.svg`);
   
-  // Generate the appropriate shape based on type
-  switch (type.toLowerCase()) {
-    case 'circle':
-      return generateCircle(svgPath, data);
-    case 'pie':
-      return generatePie(svgPath, data);
-    case 'rightarrow':
-    case 'right-arrow':
-      return generateRightArrow(svgPath, data);
-    case 'segmentedcircle':
-      return generateSegmentedCircle(svgPath, data);
-    case 'shape':
-    default:
-      // Default to circle if no specific shape is requested
-      return generateCircle(svgPath, data);
-  }
+  // Only generate donut chart
+  return generateDonutChart(svgPath, data.chartData, data.size);
+}
+
+/**
+ * Generate a donut chart SVG with icons and labels
+ * @param {string} outputPath - Path to save the SVG file
+ * @param {Array} data - Array of data objects with name, nps, responses and icon properties
+ * @param {number} size - Size of the chart
+ * @returns {string} - Path to the generated SVG file
+ */
+function generateDonutChart(outputPath, data = null, size = 300) {
+  // Increase size for better quality
+  size = Math.max(size, 500); // Ensure minimum size for readability
+  
+  const defaultData = [
+    { name: "BLUE", nps: 60.5, responses: 3874, icon: "diamond" },
+    { name: "CLASSIC", nps: 55.5, responses: 32481, icon: "star" },
+    { name: "SELECT", nps: 54.7, responses: 23574, icon: "medal" },
+    { name: "OTHER", nps: 54.5, responses: 1889, icon: "user" },
+    { name: "CELESTIA", nps: 52.6, responses: 20634, icon: "crown" },
+ 
+  ];
+
+  const chartData = data && Array.isArray(data) && data.length ? data : defaultData;
+
+  // Calculate dimensions for centered chart
+  const svgWidth = size * 2;
+  const svgHeight = size;
+  const cx = svgWidth / 2; // Center X is in the middle of the SVG width
+  let cy = svgHeight / 2; // Center Y is in the middle of the SVG height
+  const outerRadius = Math.min(svgHeight / 2, svgWidth / 4) - 40; // Ensure chart fits within SVG
+  const innerRadius = outerRadius / 2;
+
+  const iconMap = {
+    diamond: "◆",
+    star: "★",
+    medal: "🎖️",
+    user: "👤",
+    crown: "👑",
+    infinity: "∞"
+  };
+
+  const total = chartData.length;
+  const anglePer = 360 / total;
+
+  // Create SVG with higher resolution and explicit dimensions with padding to prevent text cutoff
+  const padding = 100; // Add padding to prevent text cutoff
+  let svg = `<svg width="${svgWidth}" height="${svgHeight + padding*2}" viewBox="0 0 ${svgWidth} ${svgHeight + padding*2}" xmlns="http://www.w3.org/2000/svg" font-family="Arial, sans-serif" shape-rendering="geometricPrecision" text-rendering="optimizeLegibility">`;
+  
+  // Adjust center Y position to account for padding
+  cy += padding;
+
+  let angleStart = 0;
+
+  chartData.forEach((item, i) => {
+    const angleMid = angleStart + anglePer / 2;
+    const angleEnd = angleStart + anglePer;
+
+    const startRad = (angleStart - 90) * Math.PI / 180;
+    const endRad = (angleEnd - 90) * Math.PI / 180;
+    const midRad = (angleMid - 90) * Math.PI / 180;
+
+    const x1 = cx + outerRadius * Math.cos(startRad);
+    const y1 = cy + outerRadius * Math.sin(startRad);
+    const x2 = cx + outerRadius * Math.cos(endRad);
+    const y2 = cy + outerRadius * Math.sin(endRad);
+    const x3 = cx + innerRadius * Math.cos(endRad);
+    const y3 = cy + innerRadius * Math.sin(endRad);
+    const x4 = cx + innerRadius * Math.cos(startRad);
+    const y4 = cy + innerRadius * Math.sin(startRad);
+
+    const largeArcFlag = anglePer > 180 ? 1 : 0;
+
+    // Add segment with slightly darker color for better visibility
+    svg += `
+      <path d="M${x1},${y1} 
+               A${outerRadius},${outerRadius} 0 ${largeArcFlag},1 ${x2},${y2}
+               L${x3},${y3}
+               A${innerRadius},${innerRadius} 0 ${largeArcFlag},0 ${x4},${y4}
+               Z"
+            fill="#dce6f2" stroke="white" stroke-width="1.5" />`;
+
+    // Add icon with larger font size
+    const iconX = cx + (innerRadius + outerRadius) / 2 * Math.cos(midRad);
+    const iconY = cy + (innerRadius + outerRadius) / 2 * Math.sin(midRad);
+    svg += `<text x="${iconX}" y="${iconY}" font-size="${size/15}" text-anchor="middle" dominant-baseline="middle" font-weight="bold">${iconMap[item.icon] || "?"}</text>`;
+
+    // Calculate label position with more space to avoid cutting off
+    // Use different positioning strategy based on angle to avoid text overlap
+    const labelDistance = outerRadius + 100; // Increased distance from chart
+    const labelX = cx + labelDistance * Math.cos(midRad);
+    const labelY = cy + labelDistance * Math.sin(midRad);
+    
+    // Adjust text anchor based on position to avoid cutting off
+    const textAnchor = midRad > -Math.PI/4 && midRad < Math.PI/4 ? "start" : 
+                      midRad > 3*Math.PI/4 || midRad < -3*Math.PI/4 ? "end" : "middle";
+    
+    svg += `
+      <text x="${labelX}" y="${labelY - 20}" font-size="${size/25}" text-anchor="${textAnchor}" fill="black"><tspan font-weight="bold">${item.name}</tspan></text>
+      <text x="${labelX}" y="${labelY + 10}" font-size="${size/30}" text-anchor="${textAnchor}" fill="green" font-weight="bold">NPS ${item.nps}</text>
+      <text x="${labelX}" y="${labelY + 35}" font-size="${size/35}" text-anchor="${textAnchor}">${item.responses.toLocaleString()} responses</text>
+    `;
+
+    angleStart += anglePer;
+  });
+
+  svg += `</svg>`;
+
+  fs.writeFileSync(outputPath, svg);
+  return outputPath;
 }
 
 module.exports = {
   generateShape,
-  generateCircle,
-  generatePie,
-  generateRightArrow,
-  generateSegmentedCircle
+  generateDonutChart
 };
