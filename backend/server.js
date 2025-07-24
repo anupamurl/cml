@@ -8,8 +8,7 @@ const JSZip = require('jszip');
 const xml2js = require('xml2js');
 const sharp = require('sharp');
 const mongoose = require('mongoose');
-const { insertImageIntoSlide } = require('./insertImage');
-const { generateShape } = require('./shapeGenerator');
+const { insertTableIntoSlide, replaceTableInXml } = require('./tableGenerator');
 require('dotenv').config();
 
 const app = express();
@@ -264,6 +263,18 @@ async function extractSlideElements(slideData, relationships, zipContents, slide
       if (!textContent && element['a:graphic'] && element['a:graphic'][0]['a:graphicData']) {
         const graphicData = element['a:graphic'][0]['a:graphicData'][0];
         if (graphicData['a:tbl']) {
+          const tableData = extractTableData(graphicData['a:tbl'][0]);
+          if (tableData.length > 0) {
+            elements.push({
+              type: 'table',
+              id: `table-${idx}`,
+              tableData: tableData,
+              x: x,
+              y: y,
+              width: width,
+              height: height
+            });
+          }
           textContent = extractTextFromTable(graphicData['a:tbl'][0]);
         }
       }
@@ -273,7 +284,7 @@ async function extractSlideElements(slideData, relationships, zipContents, slide
           type: 'text',
           id: `text-${idx}`,
           content: textContent,
-          originalContent: textContent, // Store original for comparison
+          originalContent: textContent,
           x: x,
           y: y,
           width: width,
@@ -405,6 +416,48 @@ function extractTextFromShape(shape) {
   });
   
   return texts.join('\n');
+}
+
+// Extract table data as array of arrays
+function extractTableData(table) {
+  const tableData = [];
+  
+  if (!table['a:tr']) {
+    return [];
+  }
+  
+  table['a:tr'].forEach(row => {
+    const rowData = [];
+    
+    if (row['a:tc']) {
+      row['a:tc'].forEach(cell => {
+        let cellText = '';
+        if (cell['a:txBody'] && cell['a:txBody'][0]['a:p']) {
+          const cellTexts = [];
+          cell['a:txBody'][0]['a:p'].forEach(paragraph => {
+            if (paragraph['a:r']) {
+              paragraph['a:r'].forEach(run => {
+                if (run['a:t'] && run['a:t'][0]) {
+                  cellTexts.push(run['a:t'][0]);
+                }
+              });
+            }
+            if (paragraph['a:t']) {
+              cellTexts.push(paragraph['a:t'][0]);
+            }
+          });
+          cellText = cellTexts.join('');
+        }
+        rowData.push(cellText || '');
+      });
+    }
+    
+    if (rowData.length > 0) {
+      tableData.push(rowData);
+    }
+  });
+  
+  return tableData;
 }
 
 // Extract text from tables
@@ -1142,8 +1195,8 @@ app.get('/api/generate-template/:id', async (req, res) => {
           for (const element of content.elements) {
             if (element.type === 'text') {
               slide.addText(element.content, {
-                x: element.x,
-                y: element.y,
+                x: element.x || 0,
+                y: element.y || 0,
                 w: element.width || 5,
                 h: element.height || 1,
                 fontSize: 14
@@ -1154,8 +1207,8 @@ app.get('/api/generate-template/:id', async (req, res) => {
               
               slide.addImage({
                 path: svgPath,
-                x: element.x,
-                y: element.y,
+                x: element.x || 0,
+                y: element.y || 0,
                 w: element.width || 2,
                 h: element.height || 2
               });
@@ -1164,6 +1217,27 @@ app.get('/api/generate-template/:id', async (req, res) => {
               setTimeout(() => {
                 try { fs.unlinkSync(svgPath); } catch (e) {}
               }, 1000);
+            } else if (element.type === 'table') {
+              let tableData = element.tableData;
+              if (!tableData || !Array.isArray(tableData) || tableData.length === 0) {
+                tableData = Array(5).fill().map((_, i) => 
+                  Array(5).fill().map((_, j) => `Cell ${i+1}-${j+1}`)
+                );
+              }
+              const totalWidth = element.width || 6;
+              const colCount = tableData[0].length;
+              const colWidths = new Array(colCount).fill(totalWidth / colCount);
+              slide.addTable(tableData, {
+                x: element.x || 1,
+                y: element.y || 1,
+                colW: colWidths,
+                fontSize: 11,
+                color: '000000',
+                fill: 'FFFFFF',
+                border: { pt: 1, color: '000000' },
+                align: 'center',
+                valign: 'middle'
+              });
             }
           }
         }
@@ -1254,53 +1328,38 @@ app.get('/api/generate-template/:id', async (req, res) => {
           // If element type is shape, add SVG image to the slide
           if (element.type === 'shape') {
             try {
-              // Import the shape generator
               const { generateShape } = require('./shapeGenerator');
-              
-              // Configure shape data for donut chart
               const shapeData = {
                 chartData: element.chartData || null,
-                size: Math.max(element.width || 300, 200) // Ensure minimum size
+                size: Math.max(element.width || 300, 200)
               };
-              
-              // Generate SVG image
               const svgPath = generateShape('donutchart', shapeData);
-              console.log(`Generated shape SVG at: ${svgPath}`);
-              
-              // Add a small delay to ensure file is written completely
               await new Promise(resolve => setTimeout(resolve, 100));
-              
-              // Convert SVG to PNG without resizing to preserve layout
               const pngPath = svgPath.replace('.svg', '.png');
-              const sharp = require('sharp');
-              await sharp(svgPath)
-                .png()
-                .toFile(pngPath);
-              
-              console.log(`Converted to PNG at: ${pngPath}`);
-              
-              // Process image for PPTX using existing image handling code
-              // For donut charts, use a larger size to ensure text is visible
+              await sharp(svgPath).png().toFile(pngPath);
               await processImageForPptx(contents, pngPath, slideId - 1, {
                 ...element,
                 src: pngPath,
-                width: Math.max(element.width || 6, 6),  // Ensure minimum width
-                height: Math.max(element.height || 4, 4), // Ensure minimum height
+                width: Math.max(element.width || 6, 6),
+                height: Math.max(element.height || 4, 4),
                 originalElement: originalElement || null
               });
-              
-              // Clean up files after a longer delay
               setTimeout(() => {
                 try { 
                   fs.unlinkSync(svgPath);
                   fs.unlinkSync(pngPath);
-                } catch (e) {
-                  console.error('Error cleaning up shape files:', e);
-                }
+                } catch (e) {}
               }, 5000);
             } catch (error) {
               console.error('Error processing shape:', error);
             }
+          }
+          // Handle table elements - ALWAYS INSERT NEW TABLE
+          else if (element.type === 'table') {
+            const tableData = element.tableData || Array(5).fill().map((_, i) => 
+              Array(5).fill().map((_, j) => `Cell ${i+1}-${j+1}`)
+            );
+            slideXml = insertTableIntoSlide(slideXml, tableData, element);
           }
           
           // Update text elements
@@ -1519,6 +1578,13 @@ app.post('/api/generate', upload.any(), async (req, res) => {
               slideXml = replaceTextInXml(slideXml, originalElement.content, element.content);
             }
           }
+          // Handle table elements - ALWAYS INSERT NEW TABLE
+          else if (element.type === 'table') {
+            const tableData = element.tableData || Array(5).fill().map((_, i) => 
+              Array(5).fill().map((_, j) => `Cell ${i+1}-${j+1}`)
+            );
+            slideXml = insertTableIntoSlide(slideXml, tableData, element);
+          }
           // Process image elements
           else if (element.type === 'image' && element.src) {
             // Use the helper function to find the image file
@@ -1723,6 +1789,8 @@ function replaceTextInXml(slideXml, oldText, newText) {
   
   return result;
 }
+
+
 
 // Replace image source in XML - this is a helper function but we'll use processImageForPptx instead
 // for actual image replacement since it handles the relationships properly
