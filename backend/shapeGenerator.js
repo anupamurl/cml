@@ -34,7 +34,7 @@ function generateShape(type, data = {}) {
  */
 function generateDonutChart(outputPath, data = null, size = 300) {
   // Increase size for better quality
-  size = Math.max(size, 500); // Ensure minimum size for readability
+  size = Math.max(size, 600); // Ensure minimum size for readability
   
   const defaultData = [
     { name: "BLUE", nps: 60.5, responses: 3874, icon: "diamond" },
@@ -42,7 +42,8 @@ function generateDonutChart(outputPath, data = null, size = 300) {
     { name: "SELECT", nps: 54.7, responses: 23574, icon: "medal" },
     { name: "OTHER", nps: 54.5, responses: 1889, icon: "user" },
     { name: "CELESTIA", nps: 52.6, responses: 20634, icon: "crown" },
- 
+    { name: "ETERNIA", nps: 52.5, responses: 73854, icon: "infinity" },
+    { name: "ETERNIAX", nps: 55.5, responses: 73854, icon: "infinity" }
   ];
 
   const chartData = data && Array.isArray(data) && data.length ? data : defaultData;
@@ -58,7 +59,7 @@ function generateDonutChart(outputPath, data = null, size = 300) {
   const iconMap = {
     diamond: "◆",
     star: "★",
-    medal: "🎖️",
+    medal: "🏅",
     user: "👤",
     crown: "👑",
     infinity: "∞"
@@ -68,8 +69,18 @@ function generateDonutChart(outputPath, data = null, size = 300) {
   const anglePer = 360 / total;
 
   // Create SVG with higher resolution and explicit dimensions with padding to prevent text cutoff
-  const padding = 100; // Add padding to prevent text cutoff
-  let svg = `<svg width="${svgWidth}" height="${svgHeight + padding*2}" viewBox="0 0 ${svgWidth} ${svgHeight + padding*2}" xmlns="http://www.w3.org/2000/svg" font-family="Arial, sans-serif" shape-rendering="geometricPrecision" text-rendering="optimizeLegibility">`;
+  const padding = 120; // Add padding to prevent text cutoff
+  let svg = `<svg width="${svgWidth}" height="${svgHeight + padding*2}" viewBox="0 0 ${svgWidth} ${svgHeight + padding*2}" xmlns="http://www.w3.org/2000/svg" font-family="Arial, Helvetica, sans-serif" style="text-rendering: geometricPrecision;">`;
+  
+  // Add defs for text styles to ensure PowerPoint compatibility
+  svg += `
+  <defs>
+    <style type="text/css">
+      .title { font: bold ${size/25}px Arial; fill: black; }
+      .value { font: bold ${size/30}px Arial; fill: green; }
+      .subtitle { font: ${size/35}px Arial; fill: black; }
+    </style>
+  </defs>`;
   
   // Adjust center Y position to account for padding
   cy += padding;
@@ -107,11 +118,11 @@ function generateDonutChart(outputPath, data = null, size = 300) {
     // Add icon with larger font size
     const iconX = cx + (innerRadius + outerRadius) / 2 * Math.cos(midRad);
     const iconY = cy + (innerRadius + outerRadius) / 2 * Math.sin(midRad);
-    svg += `<text x="${iconX}" y="${iconY}" font-size="${size/15}" text-anchor="middle" dominant-baseline="middle" font-weight="bold">${iconMap[item.icon] || "?"}</text>`;
+    svg += `<text x="${iconX}" y="${iconY}" font-size="${size/15}" text-anchor="middle" dominant-baseline="central" font-weight="bold">${iconMap[item.icon] || "?"}</text>`;
 
     // Calculate label position with more space to avoid cutting off
     // Use different positioning strategy based on angle to avoid text overlap
-    const labelDistance = outerRadius + 100; // Increased distance from chart
+    const labelDistance = outerRadius + 120; // Increased distance from chart
     const labelX = cx + labelDistance * Math.cos(midRad);
     const labelY = cy + labelDistance * Math.sin(midRad);
     
@@ -119,11 +130,13 @@ function generateDonutChart(outputPath, data = null, size = 300) {
     const textAnchor = midRad > -Math.PI/4 && midRad < Math.PI/4 ? "start" : 
                       midRad > 3*Math.PI/4 || midRad < -3*Math.PI/4 ? "end" : "middle";
     
+    // Use group to keep text elements together
     svg += `
-      <text x="${labelX}" y="${labelY - 20}" font-size="${size/25}" text-anchor="${textAnchor}" fill="black"><tspan font-weight="bold">${item.name}</tspan></text>
-      <text x="${labelX}" y="${labelY + 10}" font-size="${size/30}" text-anchor="${textAnchor}" fill="green" font-weight="bold">NPS ${item.nps}</text>
-      <text x="${labelX}" y="${labelY + 35}" font-size="${size/35}" text-anchor="${textAnchor}">${item.responses.toLocaleString()} responses</text>
-    `;
+    <g text-anchor="${textAnchor}">
+      <text x="${labelX}" y="${labelY - 20}" class="title">${item.name}</text>
+      <text x="${labelX}" y="${labelY + 10}" class="value">NPS ${item.nps}</text>
+      <text x="${labelX}" y="${labelY + 35}" class="subtitle">${item.responses.toLocaleString()} responses</text>
+    </g>`;
 
     angleStart += anglePer;
   });
