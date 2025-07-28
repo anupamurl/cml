@@ -4,6 +4,7 @@ function insertTableIntoSlide(slideXml, tableData, element) {
     tableData = Array(5).fill().map((_, i) => 
       Array(5).fill().map((_, j) => `Cell ${i+1}-${j+1}`)
     );
+ 
   }
   
   const x = Math.round((element.x || 1) * 914400);
@@ -34,16 +35,15 @@ function insertTableIntoSlide(slideXml, tableData, element) {
             <a:tblGrid>
               ${tableData[0].map(() => `<a:gridCol w="${colW}"/>`).join('')}
             </a:tblGrid>
-            ${tableData.map((row, rowIndex) => {
-              const bgColor = rowIndex % 2 === 0 ? 'FFFFFF' : 'FF0000';
-              return `
+            ${tableData.map((row, rowIndex) => `
             <a:tr h="${Math.round(h/tableData.length)}">
               ${row.map(cell => `
               <a:tc>
                 <a:txBody>
-                  <a:bodyPr/>
+                  <a:bodyPr lIns="91440" tIns="45720" rIns="91440" bIns="45720" anchor="ctr" vert="horz"/>
                   <a:lstStyle/>
                   <a:p>
+                    <a:pPr algn="ctr"/>
                     <a:r>
                       <a:t>${cell || ''}</a:t>
                     </a:r>
@@ -51,12 +51,15 @@ function insertTableIntoSlide(slideXml, tableData, element) {
                 </a:txBody>
                 <a:tcPr>
                   <a:solidFill>
-                    <a:srgbClr val="${bgColor}"/>
+                    <a:srgbClr val="${rowIndex % 2 === 1 ? 'D3D3D3' : 'FFFFFF'}"/>
                   </a:solidFill>
+                  <a:lnL><a:noFill/></a:lnL>
+                  <a:lnR><a:noFill/></a:lnR>
+                  <a:lnT><a:noFill/></a:lnT>
+                  <a:lnB><a:noFill/></a:lnB>
                 </a:tcPr>
               </a:tc>`).join('')}
-            </a:tr>`;
-            }).join('')}
+            </a:tr>`).join('')}
           </a:tbl>
         </a:graphicData>
       </a:graphic>
@@ -85,16 +88,15 @@ function replaceTableInXml(slideXml, newTableData, originalElement) {
       <a:tblGrid>
         ${newTableData[0].map(() => `<a:gridCol w="${colW}"/>`).join('')}
       </a:tblGrid>
-      ${newTableData.map((row, rowIndex) => {
-        const bgColor = rowIndex % 2 === 0 ? 'FFFFFF' : 'FF0000';
-        return `
+      ${newTableData.map((row, rowIndex) => `
         <a:tr h="${rowH}">
           ${row.map(cell => `
           <a:tc>
             <a:txBody>
-              <a:bodyPr/>
+              <a:bodyPr lIns="91440" tIns="45720" rIns="91440" bIns="45720" anchor="ctr" vert="horz"/>
               <a:lstStyle/>
               <a:p>
+                <a:pPr algn="ctr"/>
                 <a:r>
                   <a:t>${cell || ''}</a:t>
                 </a:r>
@@ -102,12 +104,15 @@ function replaceTableInXml(slideXml, newTableData, originalElement) {
             </a:txBody>
             <a:tcPr>
               <a:solidFill>
-                <a:srgbClr val="${bgColor}"/>
+                <a:srgbClr val="${rowIndex % 2 === 1 ? 'D3D3D3' : 'FFFFFF'}"/>
               </a:solidFill>
+              <a:lnL><a:noFill/></a:lnL>
+              <a:lnR><a:noFill/></a:lnR>
+              <a:lnT><a:noFill/></a:lnT>
+              <a:lnB><a:noFill/></a:lnB>
             </a:tcPr>
           </a:tc>`).join('')}
-        </a:tr>`;
-      }).join('')}
+        </a:tr>`).join('')}
     </a:tbl>`;
 
     return newTableXml;

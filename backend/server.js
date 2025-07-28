@@ -248,6 +248,26 @@ async function extractSlideElements(slideData, relationships, zipContents, slide
     const width = parseInt(ext.cx) / 914400;
     const height = parseInt(ext.cy) / 914400;
     
+    // Check if this is a table element first
+    if (element.type === 'graphicFrame' && element['a:graphic'] && element['a:graphic'][0]['a:graphicData']) {
+      const graphicData = element['a:graphic'][0]['a:graphicData'][0];
+      if (graphicData['a:tbl']) {
+        const tableData = extractTableData(graphicData['a:tbl'][0]);
+        if (tableData.length > 0) {
+          elements.push({
+            type: 'table',
+            id: `table-${idx}`,
+            tableData: tableData,
+            x: x,
+            y: y,
+            width: width,
+            height: height
+          });
+          continue; // Skip all other processing for table elements
+        }
+      }
+    }
+    
     // Process text elements
     if ((element.type === 'shape' || element.type === 'graphicFrame') && 
         (element['p:txBody'] || (element['a:graphic'] && element['a:graphic'][0]['a:graphicData']))) {
@@ -259,22 +279,10 @@ async function extractSlideElements(slideData, relationships, zipContents, slide
         textContent = extractTextFromShape(element);
       }
       
-      // Try to extract text from tables and other graphic elements
+      // Try to extract text from non-table graphic elements
       if (!textContent && element['a:graphic'] && element['a:graphic'][0]['a:graphicData']) {
         const graphicData = element['a:graphic'][0]['a:graphicData'][0];
         if (graphicData['a:tbl']) {
-          const tableData = extractTableData(graphicData['a:tbl'][0]);
-          if (tableData.length > 0) {
-            elements.push({
-              type: 'table',
-              id: `table-${idx}`,
-              tableData: tableData,
-              x: x,
-              y: y,
-              width: width,
-              height: height
-            });
-          }
           textContent = extractTextFromTable(graphicData['a:tbl'][0]);
         }
       }
@@ -293,7 +301,7 @@ async function extractSlideElements(slideData, relationships, zipContents, slide
       }
     }
     
-    // Process image elements
+    // Process image elements (skip if already processed as table)
     if (element.type === 'pic' && element['p:blipFill']) {
       try {
         const blip = element['p:blipFill'][0]['a:blip'][0];
